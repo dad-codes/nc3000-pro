@@ -1,6 +1,6 @@
 // SkyRC NC3000 Pro — BLE Reverse Engineering & Firmware Workbench
-const APP_VERSION = "v1.2.19";
-const APP_BUILD_DATE = "Build 43 (2026.11.13)";
+const APP_VERSION = "v1.2.20";
+const APP_BUILD_DATE = "Build 44 (2026.11.13)";
 window.APP_VERSION = APP_VERSION;
 window.APP_BUILD_DATE = APP_BUILD_DATE;
 
@@ -2936,20 +2936,26 @@ function updatePairCardsUI() {
         } else if (sT.chargerStatu === 2 || sK.phase === "CHARGING") {
           fillEl.className = "pair-bar-fill charging";
           if (statusEl) {
-            statusEl.textContent = `Charging ${sT.currentMa || cfg.chargeMa}mA`;
+            statusEl.innerHTML = `⚡ Charging ${sT.currentMa || cfg.chargeMa}mA`;
             statusEl.className = "pair-bar-status-badge charging";
           }
         } else if (sT.chargerStatu === 3 || sK.phase === "DISCHARGING") {
           fillEl.className = "pair-bar-fill discharging";
           if (statusEl) {
-            statusEl.textContent = `Discharging ${sT.currentMa || cfg.dischargeMa}mA`;
+            statusEl.innerHTML = `🔋 Discharging ${sT.currentMa || cfg.dischargeMa}mA`;
             statusEl.className = "pair-bar-status-badge discharging";
           }
         } else if (sK.phase === "SETTLING" || sT.chargerStatu === 4) {
           fillEl.className = "pair-bar-fill resting";
           if (statusEl) {
-            statusEl.textContent = "Resting";
+            statusEl.innerHTML = `💤 Resting <span class="sleep-zzz" aria-hidden="true"><span>z</span><span>Z</span><span>Z</span></span>`;
             statusEl.className = "pair-bar-status-badge resting";
+          }
+        } else if (sK.phase === "DONE" || sT.chargerStatu >= 5) {
+          fillEl.className = "pair-bar-fill done";
+          if (statusEl) {
+            statusEl.textContent = "✅ Done";
+            statusEl.className = "pair-bar-status-badge done";
           }
         } else if (sK.phase === "HOLDING_READY" || (isPairActive && Math.abs(diffMv) <= cfg.deadbandMv)) {
           fillEl.className = "pair-bar-fill ready";
@@ -3170,7 +3176,7 @@ function updateSlotCardUI(slotIdx) {
   } else {
     // Current is ~0mA (Resting / Done / Standby)
     if (t.chargerStatu === 4) {
-      hwLabel = "Resting (OCV)";
+      hwLabel = `💤 Resting (OCV) <span class="sleep-zzz" aria-hidden="true"><span>z</span><span>Z</span><span>Z</span></span>`;
       hwBadgeEl.className = "slot-hw-badge resting";
     } else if (t.chargerStatu === 0) {
       hwLabel = "Standby (0mA)";
@@ -3183,7 +3189,7 @@ function updateSlotCardUI(slotIdx) {
       hwBadgeEl.className = "slot-hw-badge";
     }
   }
-  hwBadgeEl.textContent = hwLabel;
+  hwBadgeEl.innerHTML = hwLabel;
 
   if (!t.hasBattery) {
     voltEl.textContent = "Empty";

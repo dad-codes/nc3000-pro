@@ -1024,23 +1024,29 @@ select {
 }
 
 .slot-hw-badge.charging {
-  background: rgba(59, 130, 246, 0.2);
-  border-color: rgba(59, 130, 246, 0.6);
-  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.25);
+  border-color: rgba(59, 130, 246, 0.7);
+  color: #bfdbfe;
   font-weight: 600;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.35);
+  animation: chargingBadgePulse 1.2s ease-in-out infinite;
 }
 
 .slot-hw-badge.discharging {
-  background: rgba(245, 158, 11, 0.2);
-  border-color: rgba(245, 158, 11, 0.6);
-  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.25);
+  border-color: rgba(245, 158, 11, 0.7);
+  color: #fde68a;
   font-weight: 600;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.35);
+  animation: dischargingBadgePulse 1.2s ease-in-out infinite;
 }
 
 .slot-hw-badge.resting {
-  background: rgba(139, 92, 246, 0.2);
-  border-color: rgba(139, 92, 246, 0.6);
-  color: #c4b5fd;
+  background: rgba(139, 92, 246, 0.25);
+  border-color: rgba(139, 92, 246, 0.7);
+  color: #ddd6fe;
+  box-shadow: 0 0 8px rgba(139, 92, 246, 0.3);
+  animation: restingBadgeGlow 2.8s ease-in-out infinite;
 }
 
 .slot-hw-badge.standby {
@@ -1945,9 +1951,13 @@ select {
 }
 
 .pair-bar-status-badge {
-  font-size: 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  position: relative;
+  font-size: 9.5px;
   font-family: var(--font-mono);
-  padding: 1px 5px;
+  padding: 1px 6px;
   border-radius: 999px;
   background: var(--bg-2);
   border: 1px solid var(--border);
@@ -1958,30 +1968,50 @@ select {
 }
 
 .pair-bar-status-badge.charging {
-  background: rgba(59, 130, 246, 0.2);
-  border-color: rgba(59, 130, 246, 0.6);
-  color: #93c5fd;
+  background: rgba(59, 130, 246, 0.25);
+  border-color: rgba(59, 130, 246, 0.7);
+  color: #bfdbfe;
   font-weight: 600;
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.35);
+  animation: chargingBadgePulse 1.2s ease-in-out infinite;
+}
+@keyframes chargingBadgePulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(59, 130, 246, 0.2); }
+  50% { box-shadow: 0 0 12px rgba(96, 165, 250, 0.6); }
 }
 
 .pair-bar-status-badge.discharging {
-  background: rgba(245, 158, 11, 0.2);
-  border-color: rgba(245, 158, 11, 0.6);
-  color: #fcd34d;
+  background: rgba(245, 158, 11, 0.25);
+  border-color: rgba(245, 158, 11, 0.7);
+  color: #fde68a;
   font-weight: 600;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.35);
+  animation: dischargingBadgePulse 1.2s ease-in-out infinite;
+}
+@keyframes dischargingBadgePulse {
+  0%, 100% { box-shadow: 0 0 4px rgba(245, 158, 11, 0.2); }
+  50% { box-shadow: 0 0 12px rgba(251, 191, 36, 0.6); }
 }
 
 .pair-bar-status-badge.resting {
-  background: rgba(139, 92, 246, 0.2);
-  border-color: rgba(139, 92, 246, 0.6);
-  color: #c4b5fd;
+  background: rgba(139, 92, 246, 0.25);
+  border-color: rgba(139, 92, 246, 0.7);
+  color: #ddd6fe;
+  box-shadow: 0 0 8px rgba(139, 92, 246, 0.3);
+  animation: restingBadgeGlow 2.8s ease-in-out infinite;
+}
+@keyframes restingBadgeGlow {
+  0%, 100% { box-shadow: 0 0 4px rgba(139, 92, 246, 0.2); }
+  50% { box-shadow: 0 0 10px rgba(167, 139, 250, 0.6); }
 }
 
-.pair-bar-status-badge.ready {
-  background: rgba(16, 185, 129, 0.2);
-  border-color: rgba(16, 185, 129, 0.6);
+.pair-bar-status-badge.ready,
+.pair-bar-status-badge.done {
+  background: rgba(16, 185, 129, 0.25);
+  border-color: rgba(16, 185, 129, 0.7);
   color: #6ee7b7;
   font-weight: 600;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.35);
 }
 
 .pair-bar-status-badge.stalled {
@@ -1995,6 +2025,47 @@ select {
   background: var(--bg-2);
   border-color: var(--border);
   color: var(--text-2);
+}
+
+/* Sleeping zzZZZ Animated Indicator */
+.sleep-zzz {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
+  margin-left: 3px;
+  font-family: var(--font-mono);
+  font-weight: 800;
+  line-height: 1;
+}
+.sleep-zzz span {
+  display: inline-block;
+  opacity: 0;
+  color: #c4b5fd;
+  text-shadow: 0 0 6px rgba(196, 181, 253, 0.85);
+  animation: zzzFloatDrift 2.2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  transform-origin: center bottom;
+}
+.sleep-zzz span:nth-child(1) { font-size: 7.5px; animation-delay: 0s; }
+.sleep-zzz span:nth-child(2) { font-size: 9px; animation-delay: 0.45s; }
+.sleep-zzz span:nth-child(3) { font-size: 11px; animation-delay: 0.9s; }
+
+@keyframes zzzFloatDrift {
+  0% {
+    opacity: 0;
+    transform: translateY(2px) scale(0.7);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-1px) scale(0.95);
+  }
+  70% {
+    opacity: 0.85;
+    transform: translateY(-4px) scale(1.15) rotate(4deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-8px) scale(1.3) rotate(10deg);
+  }
 }
 
 .pair-bar-volt {
@@ -2022,32 +2093,204 @@ select {
 }
 
 .pair-bar-fill {
+  position: relative;
   height: 100%;
   width: 0%;
   border-radius: 3px 0 0 3px;
   background: linear-gradient(90deg, #0284c7 0%, #38bdf8 100%);
-  transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1), background 0.25s ease;
+  transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  overflow: hidden;
 }
 
-.pair-bar-fill.ready {
+.pair-bar-fill.ready,
+.pair-bar-fill.done {
   background: linear-gradient(90deg, #059669 0%, #10b981 100%);
-  box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.5);
 }
 
+/* 1. Charging Animation: Left to Right Flow + Leading Plasma Tip */
 .pair-bar-fill.charging {
-  background: linear-gradient(90deg, #0284c7 0%, #38bdf8 100%);
+  background: repeating-linear-gradient(
+    -45deg,
+    #0284c7 0px,
+    #0284c7 10px,
+    #38bdf8 10px,
+    #38bdf8 20px,
+    #60a5fa 20px,
+    #60a5fa 30px
+  );
+  background-size: 42.43px 100%;
+  animation: barFlowLeftToRight 0.85s linear infinite;
+  box-shadow: 0 0 12px rgba(56, 189, 248, 0.5);
+  will-change: background-position;
 }
 
+@keyframes barFlowLeftToRight {
+  0% { background-position: 0 0; }
+  100% { background-position: 42.43px 0; }
+}
+
+.pair-bar-fill.charging::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 255, 255, 0.95) 100%);
+  box-shadow: 0 0 12px #38bdf8, 0 0 4px #ffffff;
+  border-radius: 0 3px 3px 0;
+  animation: chargeTipGlow 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes chargeTipGlow {
+  0% { opacity: 0.5; filter: brightness(1); }
+  100% { opacity: 1; filter: brightness(1.6) drop-shadow(0 0 6px #67e8f9); }
+}
+
+.pair-bar-fill.charging::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.35) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: chargeShimmerL2R 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes chargeShimmerL2R {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* 2. Discharging Animation: Right to Left Flow + Reverse Drain Shimmer */
 .pair-bar-fill.discharging {
-  background: linear-gradient(90deg, #d97706 0%, #f59e0b 100%);
+  background: repeating-linear-gradient(
+    45deg,
+    #b45309 0px,
+    #b45309 10px,
+    #d97706 10px,
+    #d97706 20px,
+    #f59e0b 20px,
+    #f59e0b 30px
+  );
+  background-size: 42.43px 100%;
+  animation: barFlowRightToLeft 0.85s linear infinite;
+  box-shadow: 0 0 12px rgba(245, 158, 11, 0.5);
+  will-change: background-position;
 }
 
+@keyframes barFlowRightToLeft {
+  0% { background-position: 42.43px 0; }
+  100% { background-position: 0 0; }
+}
+
+.pair-bar-fill.discharging::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  background: linear-gradient(270deg, rgba(251, 191, 36, 0.95) 0%, transparent 100%);
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.8);
+  border-radius: 0 3px 3px 0;
+  animation: dischargeTipPulse 0.8s ease-in-out infinite alternate;
+}
+
+@keyframes dischargeTipPulse {
+  0% { opacity: 0.5; filter: brightness(1); }
+  100% { opacity: 1; filter: brightness(1.5); }
+}
+
+.pair-bar-fill.discharging::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: linear-gradient(
+    270deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.3) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  background-size: 200% 100%;
+  animation: dischargeShimmerR2L 1.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes dischargeShimmerR2L {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* 3. Resting Animation: Calm Breathing Glow & Floating zzZZZ */
 .pair-bar-fill.resting {
-  background: linear-gradient(90deg, #6366f1 0%, #818cf8 100%);
+  background: linear-gradient(90deg, #4f46e5 0%, #818cf8 50%, #6366f1 100%);
+  animation: barBreatheGlow 3.0s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  position: relative;
+  will-change: opacity, filter, box-shadow;
+}
+
+@keyframes barBreatheGlow {
+  0%, 100% {
+    opacity: 0.65;
+    filter: brightness(0.9);
+    box-shadow: 0 0 6px rgba(99, 102, 241, 0.3), inset 0 0 4px rgba(255, 255, 255, 0.1);
+  }
+  50% {
+    opacity: 1;
+    filter: brightness(1.25);
+    box-shadow: 0 0 16px rgba(129, 140, 248, 0.85), 0 0 6px rgba(196, 181, 253, 0.6), inset 0 0 8px rgba(255, 255, 255, 0.4);
+  }
+}
+
+.pair-bar-fill.resting::after {
+  content: "z Z Z";
+  position: absolute;
+  right: 8px;
+  top: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  color: #e0e7ff;
+  text-shadow: 0 0 6px rgba(196, 181, 253, 0.9);
+  animation: restFloatingZzz 2.6s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes restFloatingZzz {
+  0% {
+    opacity: 0;
+    transform: translate(0, 3px) scale(0.8);
+  }
+  30% {
+    opacity: 0.95;
+    transform: translate(1px, -1px) scale(1);
+  }
+  70% {
+    opacity: 0.8;
+    transform: translate(3px, -5px) scale(1.15);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(6px, -10px) scale(1.3);
+  }
 }
 
 .pair-bar-fill.stalled {
   background: linear-gradient(90deg, #dc2626 0%, #ef4444 100%);
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.6);
+  animation: stalledBarPulse 1.2s ease-in-out infinite;
+}
+@keyframes stalledBarPulse {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 1; filter: brightness(1.2); }
 }
 
 .pair-bar-target-line {
