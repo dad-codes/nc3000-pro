@@ -1,6 +1,6 @@
 // SkyRC NC3000 Pro — BLE Reverse Engineering & Firmware Workbench
-const APP_VERSION = "v1.2.18";
-const APP_BUILD_DATE = "Build 42 (2026.11.13)";
+const APP_VERSION = "v1.2.19";
+const APP_BUILD_DATE = "Build 43 (2026.11.13)";
 window.APP_VERSION = APP_VERSION;
 window.APP_BUILD_DATE = APP_BUILD_DATE;
 
@@ -642,27 +642,27 @@ async function enumerateGatt() {
     services: sessionRecord.services
   });
 
-  // Automatically send safe read-only getDeviceInfo (0x57) handshake after subscribing to 0xFFE1
+  // Automatically query slot telemetry and device info after subscribing to 0xFFE1
   if (writableChars.some((u) => u.includes("ffe1"))) {
     setTimeout(async () => {
-      appendLog("SYS", null, null, "Sending verified read-only getDeviceInfo (0x57) handshake…");
+      appendLog("SYS", null, null, "Querying live NC3000 Pro slot telemetry & device status…");
+      // Poll all 4 slots immediately upon connection so running modes & active cells are detected without delay
+      await pollAllFourSlotsOnce();
+      startTelemetryPoller();
+
+      // Read device information and bootloader version in background
       await sendBytes(
         hexToBytes("0F 13 57 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 58"),
         "[Auto Handshake: getDeviceInfo MTU=true]"
       );
-      await new Promise((r) => setTimeout(r, 250));
+      await new Promise((r) => setTimeout(r, 200));
       await sendBytes(
         hexToBytes("0F 13 57 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 57"),
         "[Auto Handshake: getDeviceInfo MTU=false]"
       );
-      await new Promise((r) => setTimeout(r, 250));
+      await new Promise((r) => setTimeout(r, 200));
       await sendBytes(hexToBytes("0F 03 66 00 66"), "[Auto Handshake: checkBootVer (0x66)]");
-      await new Promise((r) => setTimeout(r, 250));
-      await pollAllFourSlotsOnce();
-      // Continuous background slot telemetry poller starts immediately upon BLE connection
-      // so inserted batteries and live voltages are detected even when the system is idle.
-      startTelemetryPoller();
-    }, 350);
+    }, 150);
   }
 }
 
@@ -716,6 +716,8 @@ async function readCharacteristicValue(cUuid) {
   }
 }
 
+let rxReassemblyBuffer = new Uint8Array(0);
+
 function onNotification(cUuid, dataView) {
   const bytes = new Uint8Array(dataView.buffer, dataView.byteOffset, dataView.byteLength);
 
@@ -742,7 +744,32 @@ function onNotification(cUuid, dataView) {
     document.getElementById("binBufferSize").textContent = `${binaryDumpTotalBytes} bytes`;
   }
 
-  appendLog("RX", cUuid, bytes, "(Notification)");
+  // BLE Notification Reassembly:
+  // SkyRC frames begin with 0x0F, followed by byte length `L`. The total frame is `L + 3` bytes.
+  // In MTU-constrained BLE environments (e.g. 20-byte MTU limit), a 22-byte 0x91 telemetry
+  // frame can be split across Chunk 1 (20B) and Chunk 2 (2B). Reassemble contiguous frames before dispatch.
+  let frameToProcess = bytes;
+  if (rxReassemblyBuffer.length > 0) {
+    const merged = new Uint8Array(rxReassemblyBuffer.length + bytes.length);
+    merged.set(rxReassemblyBuffer, 0);
+    merged.set(bytes, rxReassemblyBuffer.length);
+    const expectedLen = merged.length >= 2 ? merged[1] + 3 : 0;
+    if (expectedLen > 0 && merged.length >= expectedLen) {
+      frameToProcess = merged.slice(0, expectedLen);
+      rxReassemblyBuffer = merged.slice(expectedLen);
+    } else {
+      rxReassemblyBuffer = merged;
+      return; // Waiting for remainder of frame
+    }
+  } else if (bytes[0] === 0x0f && bytes.length >= 2) {
+    const expectedLen = bytes[1] + 3;
+    if (bytes.length < expectedLen) {
+      rxReassemblyBuffer = new Uint8Array(bytes);
+      return; // Waiting for remainder of frame
+    }
+  }
+
+  appendLog("RX", cUuid, frameToProcess, "(Notification)");
 }
 
 let bleTxQueue = Promise.resolve();
@@ -962,7 +989,17 @@ const NC3000_MODE_NAMES = {
   2: "Break-in",
   3: "Cycle",
   4: "MaxBoost",
-  5: "Turbo"
+  5: "Turbo",
+  6: "3-Stage"
+};
+const NC3000_HW_MODE_TO_ID = {
+  0: "CHARGE",
+  1: "DISCHARGE",
+  2: "BREAKIN",
+  3: "CYCLE",
+  4: "MAXBOOST",
+  5: "TURBO",
+  6: "THREE_STAGE"
 };
 const NC3000_CHARGER_STATUS_NAMES = {
   0: "Standby / Idle",
@@ -1621,6 +1658,14 @@ function switchWorkingMode(modeId, syncProfile = false) {
       applyProfile(matching.id);
       return;
     }
+  } else {
+    // Keep profile dropdown aligned to the active mode family if user opens Presets
+    const profiles = loadProfiles();
+    const matching = profiles.find((p) => p.mode === targetMode.id);
+    const profSelect = document.getElementById("keeperProfileSelect");
+    if (matching && profSelect) {
+      profSelect.value = matching.id;
+    }
   }
 
   for (let i = 0; i < 4; i++) updateSlotCardUI(i);
@@ -2217,6 +2262,8 @@ function maskToSlotIndex(mask) {
 
 // Exact decoder for 0x91 response based on NcBean.setNc3000Data(byte[]) in apk/classes4.dex
 function parseAndApplyNc3000SlotTelemetry(bytes) {
+  if (!bytes || bytes.length < 19) return null;
+
   const mask = bytes[3] & 0xff;
   const slotIdx = maskToSlotIndex(mask);
   if (slotIdx < 0) return null;
@@ -2227,29 +2274,17 @@ function parseAndApplyNc3000SlotTelemetry(bytes) {
   const deltaVMv = ((bytes[8] & 0xff) << 8) | (bytes[9] & 0xff);
   const capacityMah = ((bytes[10] & 0xff) << 8) | (bytes[11] & 0xff);
 
-  let durationSec = 0;
-  let irMohm = 0;
-  let chargerStatu = 0;
-  let mode = 0;
-  let errorState = 0;
-
-  if (bytes.length >= 22) {
-    durationSec =
-      ((bytes[12] & 0xff) * 16777216) +
-      ((bytes[13] & 0xff) << 16) +
-      ((bytes[14] & 0xff) << 8) +
-      (bytes[15] & 0xff);
-    irMohm = ((bytes[16] & 0xff) << 8) | (bytes[17] & 0xff);
-    chargerStatu = bytes[18] & 0xff;
-    mode = bytes[19] & 0xff;
-    errorState = bytes[20] & 0xff;
-  } else {
-    durationSec = ((bytes[12] & 0xff) << 8) | (bytes[13] & 0xff);
-    irMohm = ((bytes[14] & 0xff) << 8) | (bytes[15] & 0xff);
-    chargerStatu = bytes[16] & 0xff;
-    mode = bytes[17] & 0xff;
-    errorState = bytes.length >= 20 ? bytes[18] & 0xff : 0;
-  }
+  // In NC3000 Pro firmware, the slot telemetry struct always formats:
+  // [12..15]=uint32 duration (sec), [16..17]=uint16 IR (mOhm), [18]=chargerStatu, [19]=mode, [20]=errorState
+  const durationSec =
+    ((bytes[12] & 0xff) * 16777216) +
+    ((bytes[13] & 0xff) << 16) +
+    ((bytes[14] & 0xff) << 8) +
+    (bytes[15] & 0xff);
+  const irMohm = bytes.length >= 18 ? (((bytes[16] & 0xff) << 8) | (bytes[17] & 0xff)) : 0;
+  const chargerStatu = bytes.length >= 19 ? (bytes[18] & 0xff) : 0;
+  const mode = bytes.length >= 20 ? (bytes[19] & 0xff) : 0;
+  const errorState = bytes.length >= 21 ? (bytes[20] & 0xff) : 0;
 
   const hasBattery = voltageMv > 50; // NcBean treats 0 or 1 mV as empty slot
   const chargerStatusLabel = !hasBattery
@@ -2331,25 +2366,16 @@ function parseAndApplyNc3000SlotTelemetry(bytes) {
   const isUserStopCoolingDown = Date.now() < (keeperState.pairs[pairIdx]?.userStoppedUntil || 0);
 
   // Active hardware mode detection and auto-monitoring synchronization:
-  // When the physical NC3000 Pro charger is actively charging, discharging, resting, cycling, or done,
-  // detect the active mode from info.mode (0..6) and chargerStatu (>=2) or flowing current.
-  // Unless the user explicitly initiated an autonomous Race Ready session, synchronize the UI
-  // to the running hardware mode and activate monitoring on this pair so telemetry and completion
-  // are monitored seamlessly.
-  const isHwActive = info.hasBattery && (info.chargerStatu >= 2 || info.currentMa > 30);
+  // chargerStatu: 0=Standby/Idle, 1=Ready, 2=Charging, 3=Discharging, 4=Resting, 5..7=Done
+  // Hardware is running if actively charging, discharging, resting between cycles, or done.
+  // Hardware is ready/configured if in Ready state (1) or if a specific mode > 0 is selected.
+  const detectedModeId = NC3000_HW_MODE_TO_ID[info.mode] || "CHARGE";
+  const isHwRunning = info.hasBattery && (info.chargerStatu >= 2 || info.currentMa > 15);
+  const isHwReady = info.hasBattery && info.chargerStatu === 1;
+  const isHwConfigured = info.hasBattery && info.mode > 0;
+  const isHwActive = isHwRunning || isHwReady || (isHwConfigured && !keeperState.active);
 
   if (isHwActive && !isRaceReadySession && !isUserStopCoolingDown) {
-    const NC3000_HW_MODE_TO_ID = {
-      0: "CHARGE",
-      1: "DISCHARGE",
-      2: "BREAKIN",
-      3: "CYCLE",
-      4: "MAXBOOST",
-      5: "TURBO",
-      6: "THREE_STAGE"
-    };
-    const detectedModeId = NC3000_HW_MODE_TO_ID[info.mode] || "CHARGE";
-
     // If webapp is idle or in a different mode, adopt the hardware mode
     if (!keeperState.active || (cfg.mode !== detectedModeId && !isPairActive)) {
       switchWorkingMode(detectedModeId, false);
@@ -2359,7 +2385,7 @@ function parseAndApplyNc3000SlotTelemetry(bytes) {
         null,
         `[Hardware Sync] Detected active hardware session on Slot ${slotIdx + 1} (Pair ${pairIdx + 1}): Mode ${info.modeLabel} (${info.chargerStatusLabel}). Web UI synchronized to ${detectedModeId}.`
       );
-    } else if (!isPairActive) {
+    } else if (!isPairActive && isHwRunning) {
       appendLog(
         "SYS",
         null,
@@ -2368,19 +2394,27 @@ function parseAndApplyNc3000SlotTelemetry(bytes) {
       );
     }
 
-    // Activate pair monitoring
-    keeperState.pairs[pairIdx].active = true;
-    keeperState.active = true;
+    // Activate pair monitoring if hardware is actively running (charging/discharging/resting/done)
+    if (isHwRunning) {
+      keeperState.pairs[pairIdx].active = true;
+      keeperState.active = true;
 
-    if (info.chargerStatu >= 5) {
-      keeperState.slots[slotIdx].phase = "DONE";
-      keeperState.slots[slotIdx].phaseDetail = `✅ Done (${WORKING_MODES[detectedModeId]?.badge || "Native"})`;
-    } else {
-      keeperState.slots[slotIdx].phase = "NATIVE_ACTIVE";
-      keeperState.slots[slotIdx].phaseDetail = `${info.chargerStatusLabel} (${(info.voltageMv / 1000).toFixed(3)}V, ${info.currentMa}mA)`;
+      if (info.chargerStatu >= 5) {
+        keeperState.slots[slotIdx].phase = "DONE";
+        keeperState.slots[slotIdx].phaseDetail = `✅ Done (${WORKING_MODES[detectedModeId]?.badge || "Native"})`;
+      } else if (info.chargerStatu === 4) {
+        keeperState.slots[slotIdx].phase = "NATIVE_ACTIVE";
+        keeperState.slots[slotIdx].phaseDetail = `Resting (OCV Dwell)`;
+      } else {
+        keeperState.slots[slotIdx].phase = "NATIVE_ACTIVE";
+        keeperState.slots[slotIdx].phaseDetail = `${info.chargerStatusLabel} (${(info.voltageMv / 1000).toFixed(3)}V, ${info.currentMa}mA)`;
+      }
+    } else if (isHwReady) {
+      keeperState.slots[slotIdx].phase = "READY";
+      keeperState.slots[slotIdx].phaseDetail = `Ready (Primed on Hardware)`;
     }
-    keeperState.slots[slotIdx].wasBatteryPresent = true;
 
+    keeperState.slots[slotIdx].wasBatteryPresent = true;
     updateKeeperControlButtons();
   } else if (!isHwActive && keeperState.slots[slotIdx]?.phase === "NATIVE_ACTIVE" && info.chargerStatu === 0 && info.currentMa <= 10) {
     const now = Date.now();
@@ -3178,7 +3212,8 @@ function updateSlotCardUI(slotIdx) {
       const sign = diffMv > 0 ? "+" : "";
       deltaEl.textContent = `Target ${(slotTargetMv / 1000).toFixed(3)}V (${sign}${diffMv} mV)`;
     } else {
-      const modeObj = (t.mode in WORKING_MODES) ? WORKING_MODES[t.mode] : (WORKING_MODES[cfg.mode] || WORKING_MODES.CHARGE);
+      const modeId = NC3000_HW_MODE_TO_ID[t.mode] || cfg.mode;
+      const modeObj = WORKING_MODES[modeId] || WORKING_MODES[cfg.mode] || WORKING_MODES.CHARGE;
       deltaEl.textContent = `${modeObj.name}`;
     }
     curEl.textContent = `${t.currentMa} mA`;
@@ -5474,6 +5509,7 @@ window.parseAndApplyNc3000SlotTelemetry = parseAndApplyNc3000SlotTelemetry;
 window.switchWorkingMode = switchWorkingMode;
 window.setStatus = setStatus;
 window.keeperState = keeperState;
+window.slotTelemetry = slotTelemetry;
 window.updateKeeperControlButtons = updateKeeperControlButtons;
 window.updateKeeperHeaderPill = updateKeeperHeaderPill;
 window.buildNativeModeFrame = buildNativeModeFrame;

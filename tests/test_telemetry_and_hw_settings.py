@@ -247,6 +247,93 @@ def test_telemetry_and_hw_settings():
         assert hw_beep_on == 1, "NC3000 hardware keypress beep should be enabled (1)"
         assert hw_notify_on > 0, "NC3000 hardware notify beep volume should be unmuted (>0)"
 
+        print("\n--- TEST 6: Hardware Mode Detection, Ready/Resting States & BLE Split Reassembly ---")
+        # 1. Test 20-byte packet with Cycle Mode running (simulating MTU-limited BLE transmission)
+        page.evaluate("""() => {
+            window.switchWorkingMode('RACE_READY', false);
+            window.keeperState.active = false;
+            window.keeperState.pairs[0].active = false;
+            // Build 20-byte packet with mode 3 (Cycle)
+            const b = new Uint8Array([
+                0x0f, 0x13, 0x91, 0x01,
+                0x03, 0xe8, // current = 1000mA
+                0x05, 0x8c, // volt = 1420mV
+                0x00, 0x05, // deltaV = 5mV
+                0x01, 0x2c, // cap = 300mAh
+                0x00, 0x00, 0x00, 0x78, // dur = 120s
+                0x00, 0x16, // IR = 22mOhm
+                0x02,       // chargerStatu = 2 (Charging)
+                0x03        // mode = 3 (Cycle)
+            ]);
+            window.parseAndApplyNc3000SlotTelemetry(b);
+        }""")
+        mode_val = page.evaluate("document.getElementById('keeperWorkingMode').value")
+        pill_text = page.evaluate("document.getElementById('headerModePill').textContent")
+        p0_active = page.evaluate("window.keeperState.pairs[0].active")
+        delta_label = page.evaluate("document.getElementById('slotDelta-0').textContent")
+        print(f"20-Byte Packet Cycle Detection -> mode: {mode_val}, pill: '{pill_text}', p0Active: {p0_active}, slotLabel: '{delta_label}'")
+        assert mode_val == "CYCLE", "Mode should be CYCLE even with 20-byte packet"
+        assert "MODE 3: CYCLE" in pill_text, "Pill text should show MODE 3: CYCLE"
+        assert p0_active is True, "Pair 0 should be active for running cycle"
+        assert "Cycle" in delta_label, "Slot delta label should display Cycle"
+
+        # 2. Test Ready state (chargerStatu = 1, current = 0mA) with Break-in mode
+        page.evaluate("""() => {
+            window.switchWorkingMode('RACE_READY', false);
+            window.keeperState.active = false;
+            window.keeperState.pairs[0].active = false;
+            const b = new Uint8Array([
+                0x0f, 0x13, 0x91, 0x01,
+                0x00, 0x00, // current = 0mA
+                0x05, 0x82, // volt = 1410mV
+                0x00, 0x05, // deltaV = 5mV
+                0x00, 0x00, // cap = 0mAh
+                0x00, 0x00, 0x00, 0x00, // dur = 0s
+                0x00, 0x18, // IR = 24mOhm
+                0x01,       // chargerStatu = 1 (Ready)
+                0x02,       // mode = 2 (Break-in)
+                0x00, 0xff
+            ]);
+            window.parseAndApplyNc3000SlotTelemetry(b);
+        }""")
+        ready_mode = page.evaluate("document.getElementById('keeperWorkingMode').value")
+        ready_phase = page.evaluate("window.keeperState.slots[0].phase")
+        print(f"Ready State Break-in Detection -> mode: {ready_mode}, phase: '{ready_phase}'")
+        assert ready_mode == "BREAKIN", "Ready state with mode 2 must switch mode to BREAKIN"
+        assert ready_phase == "READY", "Slot phase should be READY"
+
+        # 3. Test BLE split chunk notification reassembly
+        page.evaluate("""() => {
+            window.switchWorkingMode('RACE_READY', false);
+            window.keeperState.active = false;
+            window.keeperState.pairs[0].active = false;
+            const full22 = new Uint8Array([
+                0x0f, 0x13, 0x91, 0x01,
+                0x0b, 0xb8, // 3000mA
+                0x05, 0x82, // 1410mV
+                0x00, 0x05,
+                0x01, 0xf4, // 500mAh
+                0x00, 0x00, 0x01, 0x2c, // 300s
+                0x00, 0x14, // 20mOhm
+                0x02,       // 2 (Charging)
+                0x05,       // 5 (Turbo)
+                0x00,       // err 0
+                0xaa        // checksum
+            ]);
+            const chunk1 = full22.slice(0, 20);
+            const chunk2 = full22.slice(20, 22);
+            window.onNotification('0000ffe1-0000-1000-8000-00805f9b34fb', new DataView(chunk1.buffer, chunk1.byteOffset, chunk1.byteLength));
+            window.onNotification('0000ffe1-0000-1000-8000-00805f9b34fb', new DataView(chunk2.buffer, chunk2.byteOffset, chunk2.byteLength));
+        }""")
+        split_mode = page.evaluate("document.getElementById('keeperWorkingMode').value")
+        split_p0 = page.evaluate("window.keeperState.pairs[0].active")
+        print(f"Split BLE Chunk Reassembly -> mode: {split_mode}, p0Active: {split_p0}")
+        assert split_mode == "TURBO", "Reassembled split frame must detect TURBO mode"
+        assert split_p0 is True, "Pair 0 must be active after reassembled turbo frame"
+
+        # Clean state
+        page.evaluate("() => { window.switchWorkingMode('RACE_READY', false); window.keeperState.active = false; window.keeperState.pairs[0].active = false; }")
+
         print("\n--- ALL TELEMETRY & HARDWARE SYSTEM SETTINGS TESTS PASSED! ---")
         browser.close()
 
