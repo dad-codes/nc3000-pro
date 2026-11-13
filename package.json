@@ -1,0 +1,15 @@
+{
+  "name": "nc3000-pro-ui",
+  "version": "1.2.17",
+  "description": "Mini 4WD Combined Battery Pair Balancer & Live Telemetry for SkyRC NC3000 Pro",
+  "private": true,
+  "scripts": {
+    "start": "node server.js",
+    "test": "python tests/run_all_tests.py",
+    "bump": "node scripts/bump-version.js",
+    "deploy": "node scripts/bump-version.js && firebase deploy --only hosting"
+  },
+  "buildNumber": 41,
+  "author": "dad-codes.com",
+  "license": "MIT"
+}

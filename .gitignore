@@ -1,0 +1,22 @@
+# Dependencies & Environments
+node_modules/
+__pycache__/
+*.pyc
+.env*
+
+# Local runtime & Firebase cache
+.firebase/
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+captures/
+
+# Research, reverse engineering artifacts, decompilations & reports
+research_and_learnings/
+research/
+scratch/
+firmware/
+apk/
+*-report.html
+*-plan.html

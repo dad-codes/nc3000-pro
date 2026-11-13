@@ -1,0 +1,1380 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>SkyRC NC3000 Pro Custom Interface</title>
+  <meta name="description" content="An unofficial web interface to control the SkyRC NC3000 Pro and adds a battery charger/discharger function." />
+  <link rel="icon" type="image/svg+xml" href="icon.svg" />
+  <link rel="icon" type="image/png" sizes="48x48" href="favicon.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="logo-192.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="logo-512.png" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#121721" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="NC3000 Pro" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css?v=1.2.17" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <a href="./" class="brand-logo-link" title="SkyRC NC3000 Pro Unofficial Custom Interface">
+        <img src="logo-192.png" alt="SkyRC NC3000 Pro" class="brand-badge-logo" />
+      </a>
+      <span class="brand-divider"></span>
+      <h1>NC3000 Pro Custom Interface</h1>
+      <a href="https://nc3000pro-ui.web.app" target="_blank" class="badge live-badge localhost-only" title="Live on Firebase Hosting" style="background:rgba(74,222,128,0.15); color:var(--green); border-color:rgba(74,222,128,0.4); text-decoration:none;">🚀 nc3000pro-ui.web.app</a>
+    </div>
+    <div class="connection-controls">
+      <div id="statusIndicator" class="status-pill disconnected">
+        <span class="dot"></span>
+        <span id="statusText">Disconnected</span>
+      </div>
+      <label class="filter-toggle localhost-only" title="Uncheck to show all nearby BLE devices if NC3000 Pro uses a different advertised name">
+        <input type="checkbox" id="acceptAllDevices" checked />
+        <span>Show all BLE devices</span>
+      </label>
+      <button id="btnConnect" class="btn primary">Scan &amp; Connect BLE</button>
+      <button id="btnDisconnect" class="btn danger" style="display: none;" disabled>Disconnect</button>
+      <button id="btnTogglePitMode" class="btn secondary localhost-only" title="Toggle high-contrast full-screen pit display mode for track use">🎛️ Pit Display Mode</button>
+      <button id="btnExportSession" class="btn secondary localhost-only" title="Download all discovered GATT services, device info, and captured packets as JSON">Export Capture (.json)</button>
+    </div>
+  </header>
+
+  <div id="envWarning" class="warning-banner hidden"></div>
+
+  <!-- Race Prep Auto Voltage Keeper & 4-Slot Live Telemetry Banner -->
+  <section class="keeper-dashboard" id="keeperDashboard">
+    <div class="keeper-header">
+      <div class="keeper-title-group">
+        <span class="badge keeper-badge">MINI 4WD Battery Prep - Auto Target-Voltage Controller</span>
+        <button type="button" id="headerModePill" class="mode-active-pill mono" title="Click to view or switch working modes and profiles">MODE: Race Ready</button>
+        <span id="keeperGlobalStatus" class="status-pill disconnected">
+          <span id="keeperStatusIcon" class="keeper-status-icon" title="Hardware link status">
+            <svg class="status-icon-svg" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="m2 2 20 20M9 15H7A5 5 0 0 1 7 7M15 7h2a5 5 0 0 1 3.5 8.5M8 12h5"/>
+            </svg>
+          </span>
+          <span id="keeperStatusText">NC3000 Pro Disconnected</span>
+        </span>
+      </div>
+      <div class="keeper-actions">
+        <button id="btnStartKeeper" class="btn primary" disabled>▶ Start All 4 Slots</button>
+        <button id="btnStopKeeper" class="btn danger" style="display: none;" disabled>■ Stop Running Slots</button>
+        <button id="btnOpenConfig" class="btn secondary config-toggle-btn" title="Open Target Voltage Presets &amp; Configuration Drawer">⚙️ Presets &amp; Settings</button>
+      </div>
+    </div>
+
+    <!-- Persistent Application Tab Navigation -->
+    <nav class="app-tab-nav" id="appTabNav">
+      <button type="button" class="tab-nav-btn active" id="tabBtnDashboard" data-tab="dashboard">
+        <span class="tab-icon">⚡</span>
+        <span>Dashboard &amp; Control</span>
+      </button>
+      <button type="button" class="tab-nav-btn" id="tabBtnAnalytics" data-tab="analytics">
+        <span class="tab-icon">📈</span>
+        <span>Telemetry Analytics</span>
+        <span class="tab-pulse-dot" id="analyticsPulseDot" title="Receiving live telemetry"></span>
+      </button>
+    </nav>
+
+    <div class="keeper-body" id="keeperBody">
+      <!-- Slot Selection & Mode Apply Configuration Bar -->
+      <div class="slot-mode-bar" id="slotModeBar">
+        <div class="slot-mode-bar-left">
+          <span class="slot-bar-tag">APPLY MODE TO SLOTS:</span>
+          <div class="slot-pills-row" id="slotPillsRow">
+            <label class="slot-pill-label" title="Toggle Slot 1 for selected mode">
+              <input type="checkbox" class="keeper-slot-chk" id="barChkSlot1" data-slot="0" checked />
+              <span class="slot-pill-btn"><span class="chk-icon">✓</span> Slot 1</span>
+            </label>
+            <label class="slot-pill-label" title="Toggle Slot 2 for selected mode">
+              <input type="checkbox" class="keeper-slot-chk" id="barChkSlot2" data-slot="1" checked />
+              <span class="slot-pill-btn"><span class="chk-icon">✓</span> Slot 2</span>
+            </label>
+            <label class="slot-pill-label" title="Toggle Slot 3 for selected mode">
+              <input type="checkbox" class="keeper-slot-chk" id="barChkSlot3" data-slot="2" checked />
+              <span class="slot-pill-btn"><span class="chk-icon">✓</span> Slot 3</span>
+            </label>
+            <label class="slot-pill-label" title="Toggle Slot 4 for selected mode">
+              <input type="checkbox" class="keeper-slot-chk" id="barChkSlot4" data-slot="3" checked />
+              <span class="slot-pill-btn"><span class="chk-icon">✓</span> Slot 4</span>
+            </label>
+          </div>
+        </div>
+        <div class="slot-mode-bar-right">
+          <div class="slot-quick-btns">
+            <button type="button" id="btnSelectAllSlots" class="btn small slot-filter-btn" title="Select all 4 slots">All 4 Slots</button>
+            <button type="button" id="btnSelectPair1Slots" class="btn small slot-filter-btn" title="Select Pair 1 (Slots 1 &amp; 2)">Pair 1 Only</button>
+            <button type="button" id="btnSelectPair2Slots" class="btn small slot-filter-btn" title="Select Pair 2 (Slots 3 &amp; 4)">Pair 2 Only</button>
+            <button type="button" id="btnClearAllSlots" class="btn small slot-filter-btn secondary" title="Deselect all slots">Clear</button>
+          </div>
+          <span class="slot-summary-indicator mono all-active" id="slotSelectionSummary">All 4 slots active</span>
+        </div>
+      </div>
+
+      <!-- Mini 4WD Combined Pair & Assigned Slots Layout: 2 Master Columns -> 4 Sub-Columns -->
+      <div class="pairs-dashboard-grid" id="pairsDashboardGrid">
+        <!-- Pair 1 Column: Pair 1 Card on top, Slot 1 & Slot 2 directly below -->
+        <div class="pair-master-col" id="pairMasterCol-0">
+          <div class="pair-card" id="pairCard-0">
+            <div class="pair-card-header">
+              <div class="pair-title-box">
+                <span class="pair-tag">PAIR 1</span>
+                <span class="pair-subtext">Slots 1 &amp; 2 Combined battery voltage</span>
+              </div>
+              <span class="pair-badge standby" id="pairBadge-0">Standby</span>
+            </div>
+            <!-- Pair Stall / Defective Battery Warning Banner -->
+            <div class="pair-stall-banner hidden" id="pairStallBanner-0">
+              <span class="stall-icon">⚠️</span>
+              <div class="stall-msg-box">
+                <strong class="stall-title">CELL FAULT DETECTED</strong>
+                <span class="stall-reason" id="pairStallReason-0">Slot 1: Degraded cell</span>
+              </div>
+              <button class="btn small dismiss-stall-btn" data-pair="0" title="Dismiss fault warning">✕</button>
+            </div>
+            <div class="pair-actions">
+              <button id="btnStartPair-0" class="btn small pair-start-btn" disabled title="Start Target-Voltage Keeper for Pair 1 only (Slots 1 &amp; 2)">▶ Start Pair 1</button>
+              <button id="btnStopPair-0" class="btn small pair-stop-btn" style="display: none;" disabled title="Stop Pair 1 (Slots 1 &amp; 2)">■ Stop</button>
+            </div>
+            <div class="pair-card-body">
+              <div class="pair-v-block">
+                <div class="pair-v-label">COMBINED BATTERY VOLTAGE</div>
+                <div class="pair-v-val mono" id="pairTotalV-0">—.——— V</div>
+                <div class="pair-v-delta mono" id="pairTargetDelta-0">Target: 3.000 V (Δ: —)</div>
+              </div>
+              <div class="pair-balance-block">
+                <div class="pair-v-label">CELL MATCH BALANCE</div>
+                <div class="pair-diff-val mono" id="pairDiff-0">— mV</div>
+                <div class="pair-match-grade" id="pairGrade-0">No Data</div>
+              </div>
+            </div>
+            <!-- Stacked Horizontal Voltage Bars for Slot 1 and Slot 2 -->
+            <div class="pair-bars-card" id="pairBars-0">
+              <div class="pair-bar-row" id="pairBarRow-0">
+                <div class="pair-bar-info">
+                  <div class="pair-bar-name-wrap">
+                    <span class="pair-bar-slot-name">Slot 1</span>
+                    <span class="pair-bar-status-badge standby" id="pairBarStatus-0">Standby</span>
+                  </div>
+                  <span class="pair-bar-volt mono" id="pairBarVolt-0">—.——— V</span>
+                </div>
+                <div class="pair-bar-track-wrap">
+                  <div class="pair-bar-track">
+                    <div class="pair-bar-fill" id="pairBarFill-0" style="width: 0%;"></div>
+                    <div class="pair-bar-target-line" id="pairBarTarget-0" style="left: 80%;" title="Target: 1.500 V"></div>
+                  </div>
+                  <div class="pair-bar-scale">
+                    <span>1.10V</span>
+                    <span class="target-tick-label" id="pairBarTargetLabel-0">Target: 1.500V</span>
+                    <span>1.60V</span>
+                  </div>
+                </div>
+              </div>
+              <div class="pair-bar-row" id="pairBarRow-1">
+                <div class="pair-bar-info">
+                  <div class="pair-bar-name-wrap">
+                    <span class="pair-bar-slot-name">Slot 2</span>
+                    <span class="pair-bar-status-badge standby" id="pairBarStatus-1">Standby</span>
+                  </div>
+                  <span class="pair-bar-volt mono" id="pairBarVolt-1">—.——— V</span>
+                </div>
+                <div class="pair-bar-track-wrap">
+                  <div class="pair-bar-track">
+                    <div class="pair-bar-fill" id="pairBarFill-1" style="width: 0%;"></div>
+                    <div class="pair-bar-target-line" id="pairBarTarget-1" style="left: 80%;" title="Target: 1.500 V"></div>
+                  </div>
+                  <div class="pair-bar-scale">
+                    <span>1.10V</span>
+                    <span class="target-tick-label" id="pairBarTargetLabel-1">Target: 1.500V</span>
+                    <span>1.60V</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="pair-status-footer mono" id="pairFooter-0">
+              Slot 1: — V &bull; Slot 2: — V
+            </div>
+          </div>
+
+          <!-- Slots 1 & 2 Subgrid -->
+          <div class="pair-slots-subgrid" id="pairSlots-0">
+            <!-- Slot 1 -->
+            <div class="slot-card compact" data-slot-card="0" id="slotCard-0">
+              <div class="slot-card-top">
+                <label class="slot-header-chk-label" title="Tick to include Slot 1 in mode execution">
+                  <input type="checkbox" class="keeper-slot-chk card-chk" id="cardChkSlot1" data-slot="0" checked />
+                  <span class="slot-name">SLOT 1 <code class="mono">Pair 1-A</code></span>
+                </label>
+                <span class="slot-hw-badge" id="slotHwState-0">No Data</span>
+              </div>
+              <div class="slot-voltage-row">
+                <span class="slot-voltage mono" id="slotVolt-0">—.——— V</span>
+                <span class="slot-delta mono" id="slotDelta-0">Target Δ: —</span>
+              </div>
+              <div class="slot-metrics mono">
+                <div><span class="k">CUR</span> <span id="slotCur-0">0 mA</span></div>
+                <div><span class="k">CAP</span> <span id="slotCap-0">0 mAh</span></div>
+                <div><span class="k">-ΔV</span> <span id="slotDeltaV-0">— mV</span></div>
+                <div><span class="k">IR</span> <span id="slotIr-0">— mΩ</span></div>
+              </div>
+              <div class="slot-stall-banner hidden" id="slotStallBanner-0">
+                <span class="stall-icon">⚠️</span>
+                <div class="stall-msg-box">
+                  <strong class="stall-title">STALLED CELL</strong>
+                  <span class="stall-reason" id="slotStallReason-0">Degraded cell</span>
+                </div>
+                <button class="btn small dismiss-stall-btn" data-slot="0">✕</button>
+              </div>
+              <div class="slot-keeper-bar">
+                <span class="keeper-phase" id="slotKeeperPhase-0">Status: Standby</span>
+              </div>
+            </div>
+
+            <!-- Slot 2 -->
+            <div class="slot-card compact" data-slot-card="1" id="slotCard-1">
+              <div class="slot-card-top">
+                <label class="slot-header-chk-label" title="Tick to include Slot 2 in mode execution">
+                  <input type="checkbox" class="keeper-slot-chk card-chk" id="cardChkSlot2" data-slot="1" checked />
+                  <span class="slot-name">SLOT 2 <code class="mono">Pair 1-B</code></span>
+                </label>
+                <span class="slot-hw-badge" id="slotHwState-1">No Data</span>
+              </div>
+              <div class="slot-voltage-row">
+                <span class="slot-voltage mono" id="slotVolt-1">—.——— V</span>
+                <span class="slot-delta mono" id="slotDelta-1">Target Δ: —</span>
+              </div>
+              <div class="slot-metrics mono">
+                <div><span class="k">CUR</span> <span id="slotCur-1">0 mA</span></div>
+                <div><span class="k">CAP</span> <span id="slotCap-1">0 mAh</span></div>
+                <div><span class="k">-ΔV</span> <span id="slotDeltaV-1">— mV</span></div>
+                <div><span class="k">IR</span> <span id="slotIr-1">— mΩ</span></div>
+              </div>
+              <div class="slot-stall-banner hidden" id="slotStallBanner-1">
+                <span class="stall-icon">⚠️</span>
+                <div class="stall-msg-box">
+                  <strong class="stall-title">STALLED CELL</strong>
+                  <span class="stall-reason" id="slotStallReason-1">Degraded cell</span>
+                </div>
+                <button class="btn small dismiss-stall-btn" data-slot="1">✕</button>
+              </div>
+              <div class="slot-keeper-bar">
+                <span class="keeper-phase" id="slotKeeperPhase-1">Status: Standby</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pair 2 Column: Pair 2 Card on top, Slot 3 & Slot 4 directly below -->
+        <div class="pair-master-col" id="pairMasterCol-1">
+          <div class="pair-card" id="pairCard-1">
+            <div class="pair-card-header">
+              <div class="pair-title-box">
+                <span class="pair-tag">PAIR 2</span>
+                <span class="pair-subtext">Slots 3 &amp; 4 Combined battery voltage</span>
+              </div>
+              <span class="pair-badge standby" id="pairBadge-1">Standby</span>
+            </div>
+            <!-- Pair Stall / Defective Battery Warning Banner -->
+            <div class="pair-stall-banner hidden" id="pairStallBanner-1">
+              <span class="stall-icon">⚠️</span>
+              <div class="stall-msg-box">
+                <strong class="stall-title">CELL FAULT DETECTED</strong>
+                <span class="stall-reason" id="pairStallReason-1">Slot 3: Degraded cell</span>
+              </div>
+              <button class="btn small dismiss-stall-btn" data-pair="1" title="Dismiss fault warning">✕</button>
+            </div>
+            <div class="pair-actions">
+              <button id="btnStartPair-1" class="btn small pair-start-btn" disabled title="Start Target-Voltage Keeper for Pair 2 only (Slots 3 &amp; 4)">▶ Start Pair 2</button>
+              <button id="btnStopPair-1" class="btn small pair-stop-btn" style="display: none;" disabled title="Stop Pair 2 (Slots 3 &amp; 4)">■ Stop</button>
+            </div>
+            <div class="pair-card-body">
+              <div class="pair-v-block">
+                <div class="pair-v-label">COMBINED BATTERY VOLTAGE</div>
+                <div class="pair-v-val mono" id="pairTotalV-1">—.——— V</div>
+                <div class="pair-v-delta mono" id="pairTargetDelta-1">Target: 3.000 V (Δ: —)</div>
+              </div>
+              <div class="pair-balance-block">
+                <div class="pair-v-label">CELL MATCH BALANCE</div>
+                <div class="pair-diff-val mono" id="pairDiff-1">— mV</div>
+                <div class="pair-match-grade" id="pairGrade-1">No Data</div>
+              </div>
+            </div>
+            <!-- Stacked Horizontal Voltage Bars for Slot 3 and Slot 4 -->
+            <div class="pair-bars-card" id="pairBars-1">
+              <div class="pair-bar-row" id="pairBarRow-2">
+                <div class="pair-bar-info">
+                  <div class="pair-bar-name-wrap">
+                    <span class="pair-bar-slot-name">Slot 3</span>
+                    <span class="pair-bar-status-badge standby" id="pairBarStatus-2">Standby</span>
+                  </div>
+                  <span class="pair-bar-volt mono" id="pairBarVolt-2">—.——— V</span>
+                </div>
+                <div class="pair-bar-track-wrap">
+                  <div class="pair-bar-track">
+                    <div class="pair-bar-fill" id="pairBarFill-2" style="width: 0%;"></div>
+                    <div class="pair-bar-target-line" id="pairBarTarget-2" style="left: 80%;" title="Target: 1.500 V"></div>
+                  </div>
+                  <div class="pair-bar-scale">
+                    <span>1.10V</span>
+                    <span class="target-tick-label" id="pairBarTargetLabel-2">Target: 1.500V</span>
+                    <span>1.60V</span>
+                  </div>
+                </div>
+              </div>
+              <div class="pair-bar-row" id="pairBarRow-3">
+                <div class="pair-bar-info">
+                  <div class="pair-bar-name-wrap">
+                    <span class="pair-bar-slot-name">Slot 4</span>
+                    <span class="pair-bar-status-badge standby" id="pairBarStatus-3">Standby</span>
+                  </div>
+                  <span class="pair-bar-volt mono" id="pairBarVolt-3">—.——— V</span>
+                </div>
+                <div class="pair-bar-track-wrap">
+                  <div class="pair-bar-track">
+                    <div class="pair-bar-fill" id="pairBarFill-3" style="width: 0%;"></div>
+                    <div class="pair-bar-target-line" id="pairBarTarget-3" style="left: 80%;" title="Target: 1.500 V"></div>
+                  </div>
+                  <div class="pair-bar-scale">
+                    <span>1.10V</span>
+                    <span class="target-tick-label" id="pairBarTargetLabel-3">Target: 1.500V</span>
+                    <span>1.60V</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="pair-status-footer mono" id="pairFooter-1">
+              Slot 3: — V &bull; Slot 4: — V
+            </div>
+          </div>
+
+          <!-- Slots 3 & 4 Subgrid -->
+          <div class="pair-slots-subgrid" id="pairSlots-1">
+            <!-- Slot 3 -->
+            <div class="slot-card compact" data-slot-card="2" id="slotCard-2">
+              <div class="slot-card-top">
+                <label class="slot-header-chk-label" title="Tick to include Slot 3 in mode execution">
+                  <input type="checkbox" class="keeper-slot-chk card-chk" id="cardChkSlot3" data-slot="2" checked />
+                  <span class="slot-name">SLOT 3 <code class="mono">Pair 2-A</code></span>
+                </label>
+                <span class="slot-hw-badge" id="slotHwState-2">No Data</span>
+              </div>
+              <div class="slot-voltage-row">
+                <span class="slot-voltage mono" id="slotVolt-2">—.——— V</span>
+                <span class="slot-delta mono" id="slotDelta-2">Target Δ: —</span>
+              </div>
+              <div class="slot-metrics mono">
+                <div><span class="k">CUR</span> <span id="slotCur-2">0 mA</span></div>
+                <div><span class="k">CAP</span> <span id="slotCap-2">0 mAh</span></div>
+                <div><span class="k">-ΔV</span> <span id="slotDeltaV-2">— mV</span></div>
+                <div><span class="k">IR</span> <span id="slotIr-2">— mΩ</span></div>
+              </div>
+              <div class="slot-stall-banner hidden" id="slotStallBanner-2">
+                <span class="stall-icon">⚠️</span>
+                <div class="stall-msg-box">
+                  <strong class="stall-title">STALLED CELL</strong>
+                  <span class="stall-reason" id="slotStallReason-2">Degraded cell</span>
+                </div>
+                <button class="btn small dismiss-stall-btn" data-slot="2">✕</button>
+              </div>
+              <div class="slot-keeper-bar">
+                <span class="keeper-phase" id="slotKeeperPhase-2">Status: Standby</span>
+              </div>
+            </div>
+
+            <!-- Slot 4 -->
+            <div class="slot-card compact" data-slot-card="3" id="slotCard-3">
+              <div class="slot-card-top">
+                <label class="slot-header-chk-label" title="Tick to include Slot 4 in mode execution">
+                  <input type="checkbox" class="keeper-slot-chk card-chk" id="cardChkSlot4" data-slot="3" checked />
+                  <span class="slot-name">SLOT 4 <code class="mono">Pair 2-B</code></span>
+                </label>
+                <span class="slot-hw-badge" id="slotHwState-3">No Data</span>
+              </div>
+              <div class="slot-voltage-row">
+                <span class="slot-voltage mono" id="slotVolt-3">—.——— V</span>
+                <span class="slot-delta mono" id="slotDelta-3">Target Δ: —</span>
+              </div>
+              <div class="slot-metrics mono">
+                <div><span class="k">CUR</span> <span id="slotCur-3">0 mA</span></div>
+                <div><span class="k">CAP</span> <span id="slotCap-3">0 mAh</span></div>
+                <div><span class="k">-ΔV</span> <span id="slotDeltaV-3">— mV</span></div>
+                <div><span class="k">IR</span> <span id="slotIr-3">— mΩ</span></div>
+              </div>
+              <div class="slot-stall-banner hidden" id="slotStallBanner-3">
+                <span class="stall-icon">⚠️</span>
+                <div class="stall-msg-box">
+                  <strong class="stall-title">STALLED CELL</strong>
+                  <span class="stall-reason" id="slotStallReason-3">Degraded cell</span>
+                </div>
+                <button class="btn small dismiss-stall-btn" data-slot="3">✕</button>
+              </div>
+              <div class="slot-keeper-bar">
+                <span class="keeper-phase" id="slotKeeperPhase-3">Status: Standby</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Telemetry Analytics & Multi-Metric Chart View (Tab 2) -->
+    <section class="analytics-tab-view hidden" id="analyticsTabView">
+      <!-- Analytics Toolbar: Slot Focus Selection, Status, Controls & Export -->
+      <div class="analytics-toolbar" id="analyticsToolbar">
+        <div class="analytics-toolbar-left">
+          <span class="analytics-bar-tag">SLOT TELEMETRY FOCUS:</span>
+          <div class="analytics-slot-pills" id="analyticsSlotPills">
+            <button type="button" class="analytics-pill-btn active" data-analytics-slot="0" id="btnAnalyticsSlot0">Slot 1</button>
+            <button type="button" class="analytics-pill-btn" data-analytics-slot="1" id="btnAnalyticsSlot1">Slot 2</button>
+            <button type="button" class="analytics-pill-btn" data-analytics-slot="2" id="btnAnalyticsSlot2">Slot 3</button>
+            <button type="button" class="analytics-pill-btn" data-analytics-slot="3" id="btnAnalyticsSlot3">Slot 4</button>
+            <button type="button" class="analytics-pill-btn overlay-btn" data-analytics-slot="-1" id="btnAnalyticsSlotAll" title="Overlay all 4 slot voltage curves">All 4 Slots Overlay</button>
+          </div>
+        </div>
+        <div class="analytics-toolbar-right">
+          <span class="analytics-status-pill mono" id="analyticsStreamStatus">
+            <span class="status-pulse-dot"></span> <span id="analyticsPointCount">0 pts</span>
+          </span>
+          <button type="button" id="btnPauseChart" class="btn small" title="Pause or resume live chart streaming">⏸️ Pause</button>
+          <button type="button" id="btnResetSlotChart" class="btn small secondary" title="Reset chart data for currently selected slot">🔄 Reset Slot</button>
+          <div class="export-dropdown-wrapper">
+            <button type="button" id="btnExportMenu" class="btn small primary" title="Export telemetry records">📥 Export ▼</button>
+            <div class="export-menu-dropdown hidden" id="exportMenuDropdown">
+              <button type="button" id="btnExportCsvSlot" class="export-item">📄 Export CSV (Active Slot)</button>
+              <button type="button" id="btnExportCsvAll" class="export-item">📊 Export CSV (All 4 Slots)</button>
+              <button type="button" id="btnExportJson" class="export-item">📦 Export JSON (Full Session)</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- KPI Summary Ribbon: Max Capacity, Live V, Live I, IR, Duration -->
+      <div class="analytics-kpi-grid" id="analyticsKpiGrid">
+        <!-- 1. Max Capacity Hero Card -->
+        <div class="kpi-card highlight-card">
+          <div class="kpi-card-header">
+            <span class="kpi-label">MAX CAPACITY</span>
+            <span class="kpi-badge badge-green" id="kpiSlotBadge">SLOT 1</span>
+          </div>
+          <div class="kpi-val-row">
+            <span class="kpi-value mono" id="kpiMaxCapacity">0</span>
+            <span class="kpi-unit">mAh</span>
+          </div>
+          <div class="kpi-footer-meta">
+            <span id="kpiLiveCapacity">Current: 0 mAh</span>
+          </div>
+        </div>
+
+        <!-- 2. Live Voltage Card -->
+        <div class="kpi-card">
+          <div class="kpi-card-header">
+            <span class="kpi-label">VOLTAGE</span>
+            <span class="kpi-sub-label mono" id="kpiVoltRange">Min: — | Max: —</span>
+          </div>
+          <div class="kpi-val-row">
+            <span class="kpi-value mono text-blue" id="kpiLiveVoltage">—.———</span>
+            <span class="kpi-unit">V</span>
+          </div>
+          <div class="kpi-footer-meta">
+            <span id="kpiDeltaV">-ΔV: — mV</span>
+          </div>
+        </div>
+
+        <!-- 3. Live Current Card -->
+        <div class="kpi-card">
+          <div class="kpi-card-header">
+            <span class="kpi-label">CURRENT</span>
+            <span class="kpi-badge badge-neutral" id="kpiCurrentDirection">IDLE</span>
+          </div>
+          <div class="kpi-val-row">
+            <span class="kpi-value mono text-green" id="kpiLiveCurrent">0</span>
+            <span class="kpi-unit">mA</span>
+          </div>
+          <div class="kpi-footer-meta">
+            <span id="kpiRateLabel">Mode: Standby</span>
+          </div>
+        </div>
+
+        <!-- 4. Internal Resistance (IR) Card -->
+        <div class="kpi-card">
+          <div class="kpi-card-header">
+            <span class="kpi-label">INTERNAL RESISTANCE</span>
+            <span class="kpi-sub-label mono" id="kpiIrBaseline">Base: — mΩ</span>
+          </div>
+          <div class="kpi-val-row">
+            <span class="kpi-value mono text-purple" id="kpiLiveIr">—</span>
+            <span class="kpi-unit">mΩ</span>
+          </div>
+          <div class="kpi-footer-meta">
+            <span id="kpiIrHealth">Cell IR Health: —</span>
+          </div>
+        </div>
+
+        <!-- 5. Active Session Timer Card -->
+        <div class="kpi-card">
+          <div class="kpi-card-header">
+            <span class="kpi-label">RUN DURATION</span>
+            <span class="kpi-badge badge-neutral" id="kpiRunPhase">Standby</span>
+          </div>
+          <div class="kpi-val-row">
+            <span class="kpi-value mono" id="kpiRunDuration">00:00:00</span>
+          </div>
+          <div class="kpi-footer-meta">
+            <span id="kpiSamplesRecorded">0 samples recorded</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chart Container Card with Responsive Canvas -->
+      <div class="analytics-chart-card">
+        <div class="chart-header">
+          <div class="chart-title-group">
+            <h3 id="chartHeadingTitle">Slot 1 Telemetry Curves</h3>
+            <span class="chart-subtitle" id="chartSubtitle">Real-time Voltage (V), Current (mA), IR (mΩ) and Capacity (mAh)</span>
+          </div>
+          <div class="chart-metric-toggles-wrapper" id="chartMetricToggles">
+            <!-- Single Slot View: 4 Multi-Axis Checkboxes -->
+            <div class="chart-metric-toggles" id="singleSlotMetricToggles">
+              <label class="metric-toggle-label text-blue" title="Toggle Voltage curve">
+                <input type="checkbox" id="toggleMetricVoltage" checked />
+                <span>Voltage (V)</span>
+              </label>
+              <label class="metric-toggle-label text-green" title="Toggle Current curve">
+                <input type="checkbox" id="toggleMetricCurrent" checked />
+                <span>Current (mA)</span>
+              </label>
+              <label class="metric-toggle-label text-purple" title="Toggle Internal Resistance curve">
+                <input type="checkbox" id="toggleMetricIr" checked />
+                <span>IR (mΩ)</span>
+              </label>
+              <label class="metric-toggle-label text-amber" title="Toggle Capacity curve">
+                <input type="checkbox" id="toggleMetricCapacity" checked />
+                <span>Capacity (mAh)</span>
+              </label>
+            </div>
+
+            <!-- All 4 Slots Overlay View: Direct Comparison Metric Pills -->
+            <div class="chart-overlay-pills hidden" id="overlayMetricPills">
+              <span class="overlay-pills-label">COMPARE METRIC:</span>
+              <button type="button" class="overlay-metric-pill active text-blue" data-overlay-metric="voltage" id="btnOverlayMetricVoltage" title="Compare Voltage curves across all 4 slots">⚡ Voltage (V)</button>
+              <button type="button" class="overlay-metric-pill text-green" data-overlay-metric="current" id="btnOverlayMetricCurrent" title="Compare Current curves across all 4 slots">🟢 Current (mA)</button>
+              <button type="button" class="overlay-metric-pill text-purple" data-overlay-metric="ir" id="btnOverlayMetricIr" title="Compare Internal Resistance across all 4 slots">🟣 IR (mΩ)</button>
+              <button type="button" class="overlay-metric-pill text-amber" data-overlay-metric="capacity" id="btnOverlayMetricCapacity" title="Compare Delivered Capacity across all 4 slots">🟡 Capacity (mAh)</button>
+            </div>
+          </div>
+        </div>
+        <div class="chart-canvas-wrapper" id="chartCanvasWrapper">
+          <canvas id="telemetryChartCanvas"></canvas>
+        </div>
+      </div>
+    </section>
+  </section>
+
+  <main class="workspace-grid localhost-only" style="display: none;" aria-hidden="true">
+    <!-- Left Column: Device Identity & GATT Tree -->
+    <section class="panel gatt-panel">
+      <div class="panel-header">
+        <h2>1. Device Identity &amp; GATT Map</h2>
+        <button id="btnReadAll" class="btn small" disabled>Read All Readable</button>
+      </div>
+
+      <div class="identity-card" id="identityCard">
+        <div class="kv-grid">
+          <div class="kv"><span class="k">BLE Name</span><span class="v" id="infoName">—</span></div>
+          <div class="kv"><span class="k">Device ID</span><span class="v mono" id="infoId">—</span></div>
+          <div class="kv"><span class="k">Model</span><span class="v" id="infoModel">—</span></div>
+          <div class="kv"><span class="k">Manufacturer</span><span class="v" id="infoMfg">—</span></div>
+          <div class="kv"><span class="k">Firmware Rev</span><span class="v highlight" id="infoFw">—</span></div>
+          <div class="kv"><span class="k">Hardware Rev</span><span class="v highlight" id="infoHw">—</span></div>
+          <div class="kv"><span class="k">Software Rev</span><span class="v" id="infoSw">—</span></div>
+          <div class="kv"><span class="k">Active TX / RX</span><span class="v mono" id="infoActiveChars">—</span></div>
+        </div>
+      </div>
+
+      <div class="custom-uuid-bar">
+        <input type="text" id="customServiceUuid" placeholder="Optional custom 128-bit Service UUID (if not auto-detected)" class="mono" />
+        <button id="btnAddUuid" class="btn small">Add UUID</button>
+      </div>
+
+      <div class="gatt-list" id="gattList">
+        <div class="empty-state">
+          Click <strong>Scan &amp; Connect BLE</strong> to pair with your SkyRC NC3000 Pro and enumerate all GATT Services &amp; Characteristics.
+        </div>
+      </div>
+    </section>
+
+    <!-- Middle Column: Protocol Prober, Command Scanner & Dumper -->
+    <section class="panel probe-panel">
+      <div class="panel-header">
+        <h2>2. Protocol Prober &amp; Command Scanner</h2>
+        <div class="char-selectors">
+          <label>TX Characteristic:
+            <select id="txCharSelect" class="mono" disabled>
+              <option value="">(Connect first)</option>
+            </select>
+          </label>
+          <label>Write Mode:
+            <select id="writeModeSelect">
+              <option value="auto">Auto</option>
+              <option value="withoutResponse">Write Without Response</option>
+              <option value="withResponse">Write With Response</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="probe-section">
+        <h3>Verified NC3000 Pro Read-Only Commands (Decompiled from SkyCharger v2.94)</h3>
+        <p class="hint">Decompiling <code>Cmd.java</code> revealed why the initial probe did not reply: SkyCharger BLE frames use <code>0F [LEN] [CMD] [PAYLOAD...] [CHECKSUM]</code> <strong>without</strong> a trailing <code>FF FF</code>, and <code>0x57</code> requires a 20/21-byte payload. All buttons below are 100% read-only queries:</p>
+        <div class="probe-buttons">
+          <button class="btn probe-btn" data-hex="0F 13 57 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 58" disabled>
+            <span class="cmd-title">1. getDeviceInfo (0x57, MTU=true, 21B)</span>
+            <code class="mono">0F 13 57 00 01 00...00 58</code>
+          </button>
+          <button class="btn probe-btn" data-hex="0F 13 57 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 57" disabled>
+            <span class="cmd-title">2. getDeviceInfo (0x57, MTU=false, 20B)</span>
+            <code class="mono">0F 13 57 00 00 00...00 57</code>
+          </button>
+          <button class="btn probe-btn" data-hex="0F 03 57 00 57" disabled>
+            <span class="cmd-title">3. getDeviceInfo Short (0x57, 5B)</span>
+            <code class="mono">0F 03 57 00 57</code>
+          </button>
+          <button class="btn probe-btn" data-hex="0F 03 91 01 92" disabled>
+            <span class="cmd-title">4. getNc300Data Slot 1 (0x91, mask 0x01)</span>
+            <code class="mono">0F 03 91 01 92</code>
+          </button>
+          <button class="btn probe-btn" data-hex="0F 03 91 02 93" disabled>
+            <span class="cmd-title">5. getNc300Data Slot 2 (0x91, mask 0x02)</span>
+            <code class="mono">0F 03 91 02 93</code>
+          </button>
+          <button class="btn probe-btn" data-hex="0F 03 91 04 95" disabled>
+            <span class="cmd-title">6. getNc300Data Slot 3 (0x91, mask 0x04)</span>
+            <code class="mono">0F 03 91 04 95</code>
+          </button>
+          <button class="btn probe-btn" data-hex="0F 03 91 08 99" disabled>
+            <span class="cmd-title">7. getNc300Data Slot 4 (0x91, mask 0x08)</span>
+            <code class="mono">0F 03 91 08 99</code>
+          </button>
+          <button class="btn probe-btn" data-hex="0F 03 96 04 9A" disabled>
+            <span class="cmd-title">8. querySystemSetting (0x96)</span>
+            <code class="mono">0F 03 96 04 9A</code>
+          </button>
+        </div>
+      </div>
+
+      <div class="probe-section">
+        <h3>Custom Frame Sender &amp; SkyRC Builder</h3>
+        <div class="input-row">
+          <input type="text" id="rawHexInput" class="mono" placeholder="Hex bytes, e.g. 0F 03 91 00 91" value="0F 13 57 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 58" />
+          <button id="btnWrapSkyrc" class="btn small" title="Takes CMD + payload bytes and wraps them in 0F [len] [cmd] [payload] [chk]">Wrap SkyRC Frame</button>
+          <button id="btnSendHex" class="btn primary" disabled>Send Hex</button>
+        </div>
+      </div>
+
+      <div class="probe-section">
+        <h3>Automated Command Opcode Scanner (0x00 – 0xFF)</h3>
+        <p class="hint">Scans every SkyRC command opcode to discover all supported telemetry, calibration, memory read, and bootloader commands on the NC3000 Pro.</p>
+        <div class="scanner-controls">
+          <label>Start Cmd (Hex): <input type="text" id="scanStart" class="mono short-input" value="00" /></label>
+          <label>End Cmd (Hex): <input type="text" id="scanEnd" class="mono short-input" value="FF" /></label>
+          <label>Delay (ms): <input type="number" id="scanDelay" class="mono short-input" value="120" min="30" max="2000" /></label>
+          <button id="btnStartScan" class="btn primary" disabled>Start Opcode Scan</button>
+          <button id="btnStopScan" class="btn danger" disabled>Stop</button>
+        </div>
+        <div id="scanProgress" class="scan-progress">Idle — Discovered opcodes will appear below.</div>
+        <div id="discoveredOpcodes" class="opcode-hits mono"></div>
+      </div>
+
+      <div class="probe-section">
+        <h3>Memory / Block Read &amp; Binary Buffer Dumper</h3>
+        <p class="hint">Accumulates incoming payload bytes from a read command or stream into a raw <code>.bin</code> file.</p>
+        <div class="dumper-controls">
+          <label class="filter-toggle">
+            <input type="checkbox" id="recordToBin" />
+            <span>Record RX payloads to binary buffer</span>
+          </label>
+          <span id="binBufferSize" class="mono badge">0 bytes</span>
+          <button id="btnClearBin" class="btn small">Clear Buffer</button>
+          <button id="btnDownloadBin" class="btn secondary">Save Dump (.bin)</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Right Column: Live Packet Sniffer & Frame Decoder -->
+    <section class="panel log-panel">
+      <div class="panel-header">
+        <h2>3. Live BLE Packet Log &amp; Decoder</h2>
+        <div class="log-controls">
+          <label class="filter-toggle">
+            <input type="checkbox" id="autoScrollLog" checked />
+            <span>Auto-scroll</span>
+          </label>
+          <button id="btnCopyLog" class="btn small">Copy Log</button>
+          <button id="btnClearLog" class="btn small">Clear</button>
+        </div>
+      </div>
+
+      <div id="packetLog" class="packet-log mono"></div>
+    </section>
+  </main>
+
+  <!-- Site Footer with dad-codes.com Attribution -->
+  <footer class="site-footer" id="siteFooter">
+    <div class="footer-container">
+      <div class="footer-meta">
+        <span class="footer-title">SkyRC NC3000 Pro Custom Interface</span>
+        <span class="footer-sep">•</span>
+        <span class="footer-sub">Mini 4WD Battery Prep and Voltage Controller</span>
+        <span class="footer-sep">•</span>
+        <span class="footer-version mono" id="siteFooterVersion">v1.2.17</span>
+      </div>
+      <div class="footer-credit">
+        <span>Built by <a href="https://dad-codes.com" target="_blank" rel="noopener noreferrer" class="dad-codes-link" title="Visit dad-codes.com">dad-codes.com</a></span>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Slide-in Drawer for Presets & Configuration -->
+  <div id="configDrawerOverlay" class="drawer-overlay hidden" aria-hidden="true">
+    <div class="drawer-backdrop" id="configDrawerBackdrop"></div>
+    <aside class="config-drawer" id="configDrawer" role="dialog" aria-modal="true" aria-labelledby="configDrawerTitle">
+      <div class="drawer-header">
+        <div class="drawer-header-title">
+          <span class="badge keeper-badge">SETUP</span>
+          <h3 id="configDrawerTitle">Target Voltage &amp; Presets</h3>
+          <span class="badge version-badge mono" id="drawerVersionHeader" title="Application version">v1.2.17</span>
+        </div>
+        <button type="button" id="btnCloseConfig" class="btn small close-drawer-btn" title="Close configuration">&times; Done</button>
+      </div>
+      <div class="drawer-body">
+        <div class="keeper-controls-card in-drawer">
+
+          <!-- Load Presets Manager (Replaces redundant Working Mode select) -->
+          <div class="profile-manager-box">
+            <div class="profile-row-top">
+              <span class="preset-label">LOAD PRESETS:</span>
+              <select id="keeperProfileSelect" class="profile-select mono" title="Choose a preset configuration to load matching mode and parameters">
+                <!-- Dynamically populated via loadProfiles() -->
+              </select>
+            </div>
+            <div class="profile-btn-row">
+              <button type="button" id="btnSaveNewProfile" class="btn small profile-action-btn" title="Save current settings as a new named profile">💾 Save As New</button>
+              <button type="button" id="btnOverwriteProfile" class="btn small profile-action-btn" title="Update selected profile with current settings">✏️ Overwrite</button>
+              <button type="button" id="btnDeleteProfile" class="btn small profile-action-btn danger" title="Standard factory presets cannot be deleted" disabled>🗑️ Delete</button>
+              <button type="button" id="btnResetProfiles" class="btn small profile-action-btn secondary" title="Reset to factory profiles">↺ Defaults</button>
+            </div>
+          </div>
+
+          <!-- Working Mode Selection (Retained in DOM for state/tests, hidden visually as Load Presets manages mode) -->
+          <div class="keeper-mode-section" style="display: none;" aria-hidden="true">
+            <span class="preset-label">WORKING MODE (NATIVE &amp; RACE PREP):</span>
+            <select id="keeperWorkingMode" class="mode-select mono">
+              <option value="RACE_READY" selected>🏎️ Race Ready Mode (Auto Target-Voltage Balancer)</option>
+              <option value="CHARGE">⚡ Mode 0: Charge (Standard Saturation)</option>
+              <option value="DISCHARGE">🔋 Mode 1: Discharge (Capacity &amp; Storage)</option>
+              <option value="CYCLE">🔄 Mode 3: Cycle / Refresh (Memory Revival)</option>
+              <option value="BREAKIN">🔬 Mode 2: Break-in (IEC 61951-2 Standard)</option>
+              <option value="TURBO">🚀 Mode 5: Turbo Charge (3.0A Rapid)</option>
+              <option value="THREE_STAGE">📈 Mode 6: 3-Stage Charging (Step Down)</option>
+              <option value="MAXBOOST">💥 Mode 4: MaxBoost (Zero-Volt Wakeup)</option>
+            </select>
+          </div>
+
+          <!-- Section 1: Race Ready Mode Parameters (Default) -->
+          <div id="sectionModeRaceReady" class="mode-param-section">
+            
+            <!-- Target Voltage Preset Bar -->
+            <div class="keeper-preset-row">
+              <span class="preset-label">TARGET VOLTAGE PRESET:</span>
+              <select id="raceReadyPresetSelect" class="form-select mono race-preset-select" title="Choose a pre-configured target voltage profile or enter custom voltages below">
+                <option value="3.000" data-pair-v="3.000" data-v="1.500" data-chg="800" data-dis="1000" selected>🏎️ Race Ready: 3.00V (1.50V / cell - High Punch Sprint)</option>
+                <option value="2.640" data-pair-v="2.640" data-v="1.320" data-chg="600" data-dis="600">🔋 Storage: 2.64V (1.32V / cell - Priming &amp; Resting)</option>
+                <option value="2.800" data-pair-v="2.800" data-v="1.400" data-chg="800" data-dis="1000">🎢 Tech Course: 2.80V (1.40V / cell - Safe Jumps &amp; Lanes)</option>
+                <option value="2.900" data-pair-v="2.900" data-v="1.450" data-chg="800" data-dis="1000">⚡ Speed Balanced: 2.90V (1.45V / cell - Medium Punch)</option>
+                <option value="3.050" data-pair-v="3.050" data-v="1.525" data-chg="1000" data-dis="1000">🚀 Sprint Peak: 3.05V (1.525V / cell - Hot Heat)</option>
+                <option value="custom" disabled>⚙️ Custom Target Voltage</option>
+              </select>
+            </div>
+
+            <!-- Pack Target Voltages & Link Control -->
+            <div class="race-targets-panel">
+              <div class="race-targets-row">
+                <label class="k-field highlight-field race-target-card" title="Combined voltage for Pair 1 (Slot 1 &amp; Slot 2). Automatically balances both cells to Target / 2.">
+                  <div class="race-target-header">
+                    <span class="field-label-accent">Pair 1 (Slots 1 &amp; 2) Target</span>
+                    <span class="field-subnote mono" id="pair1CellTargetNote">1.500 V / cell</span>
+                  </div>
+                  <div class="race-target-input-wrap">
+                    <input type="number" id="keeperPair1TargetV" class="mono highlight-input pair-target-input" value="3.000" min="1.800" max="3.500" step="0.010" />
+                    <span class="race-unit-affix">V</span>
+                  </div>
+                </label>
+
+                <label class="k-field highlight-field race-target-card" title="Combined voltage for Pair 2 (Slot 3 &amp; Slot 4). Automatically balances both cells to Target / 2.">
+                  <div class="race-target-header">
+                    <span class="field-label-accent">Pair 2 (Slots 3 &amp; 4) Target</span>
+                    <span class="field-subnote mono" id="pair2CellTargetNote">1.500 V / cell</span>
+                  </div>
+                  <div class="race-target-input-wrap">
+                    <input type="number" id="keeperPair2TargetV" class="mono highlight-input pair-target-input" value="3.000" min="1.800" max="3.500" step="0.010" />
+                    <span class="race-unit-affix">V</span>
+                  </div>
+                </label>
+              </div>
+
+              <div class="k-field link-pairs-box">
+                <label class="link-pairs-label" title="When checked, setting target voltage applies to both Pair 1 and Pair 2. Uncheck to configure independent pair targets.">
+                  <input type="checkbox" id="chkLinkPairs" checked />
+                  <span>Set voltage on both pairs</span>
+                </label>
+              </div>
+            </div>
+
+            <!-- Current & Stage Tuning (2x2 Balanced Grid) -->
+            <div class="race-section-divider">
+              <span class="section-divider-title">CURRENT &amp; STAGE TUNING</span>
+            </div>
+            <div class="keeper-form-grid race-currents-grid">
+              <label class="k-field" title="Charge current when battery is &gt;35mV below Target">
+                <span>Charge Current (mA)</span>
+                <input type="number" id="keeperChargeMa" class="mono" value="800" min="200" max="3000" step="50" />
+              </label>
+              <label class="k-field" title="Discharge current when battery is &gt;35mV above Target">
+                <span>Discharge Current (mA)</span>
+                <input type="number" id="keeperDischargeMa" class="mono" value="1000" min="100" max="2500" step="50" />
+              </label>
+              <label class="k-field" title="Gentler current used when within 35mV of Target to reduce voltage rebound/sag (200mA hardware minimum)">
+                <span>Fine Trim Current (mA)</span>
+                <input type="number" id="keeperFineMa" class="mono" value="200" min="200" max="1000" step="50" />
+              </label>
+              <label class="k-field" title="Hardware Trickle current (0 = Off, 10–100mA) and native restartVolt sent in 0x94">
+                <span>Trickle Hold (mA)</span>
+                <input type="number" id="keeperTrickleMa" class="mono" value="30" min="0" max="100" step="10" />
+              </label>
+            </div>
+
+            <!-- Balance Tolerance & Dynamics (3-column Balanced Grid) -->
+            <div class="race-section-divider">
+              <span class="section-divider-title">BALANCE TOLERANCE &amp; TIMING</span>
+            </div>
+            <div class="keeper-form-grid race-dynamics-grid">
+              <label class="k-field" title="Acceptable resting open-circuit voltage entry window (±mV per cell). Default ±5mV per cell (±10mV pack).">
+                <span>Deadband (±mV)</span>
+                <input type="number" id="keeperDeadbandMv" class="mono" value="5" min="2" max="50" step="1" />
+              </label>
+              <label class="k-field" title="Seconds to let battery voltage settle (open-circuit) after a charge/discharge pass before re-checking against Target">
+                <span>Settle Rest (sec)</span>
+                <input type="number" id="keeperSettleSec" class="mono" value="15" min="5" max="120" step="5" />
+              </label>
+              <label class="k-field" title="Minutes of charging without voltage progress or repeated collapse before declaring cell defective">
+                <span>Stall / Fault (min)</span>
+                <input type="number" id="keeperStallTimeoutMin" class="mono" value="4" min="2" max="15" step="1" />
+              </label>
+            </div>
+
+            <div class="mode-info-box">
+              <strong>Autonomous Series-Pair Balancer:</strong> Balances each cell to Target/2 (e.g. 1.6V discharges to 1.5V, 1.4V charges to 1.5V) so the 2-cell series pair matches perfectly before race heats.
+            </div>
+          </div>
+
+          <!-- Section 2: Mode 0 Standard Charge -->
+          <div id="sectionModeNativeCharge" class="mode-param-section" style="display: none;">
+            <div class="race-section-divider">
+              <span class="section-divider-title">PRIMARY SATURATION CHARGE</span>
+            </div>
+            <div class="keeper-form-grid grid-2col">
+              <label class="k-field" title="Charging current for standard saturation charge (200–3000 mA)">
+                <span>Charge Current (mA)</span>
+                <input type="number" id="mode0ChargeMa" class="mono" value="1000" min="200" max="3000" step="50" />
+              </label>
+              <label class="k-field" title="Target charge cutoff voltage (1250–1800 mV, default 1650 mV)">
+                <span>Cut-off Voltage (mV)</span>
+                <input type="number" id="mode0CutoffMv" class="mono" value="1650" min="1250" max="1800" step="10" />
+              </label>
+            </div>
+
+            <div class="race-section-divider">
+              <span class="section-divider-title">TERMINATION &amp; TRICKLE HOLD</span>
+            </div>
+            <div class="keeper-form-grid grid-3col">
+              <label class="k-field" title="Negative Delta V full-charge peak detection (0 = Disabled, 1–20 mV, default 5 mV)">
+                <span>-ΔV Peak (mV)</span>
+                <input type="number" id="mode0DeltaVMv" class="mono" value="5" min="0" max="20" step="1" />
+              </label>
+              <label class="k-field" title="Holding / restart voltage after charge completes (1200–1450 mV, default 1290 mV)">
+                <span>Restart (mV)</span>
+                <input type="number" id="mode0RestartVoltMv" class="mono" value="1290" min="1200" max="1450" step="10" />
+              </label>
+              <label class="k-field" title="Trickle maintenance current after charge (0 = Off, 10–250 mA, default 30 mA)">
+                <span>Trickle (mA)</span>
+                <input type="number" id="mode0TrickleMa" class="mono" value="30" min="0" max="250" step="10" />
+              </label>
+            </div>
+
+            <div class="race-section-divider">
+              <span class="section-divider-title">SAFETY LIMIT CEILINGS</span>
+            </div>
+            <div class="keeper-form-grid grid-2col">
+              <label class="k-field" title="Safety capacity protection ceiling (100–50000 mAh)">
+                <span>Safety Capacity (mAh)</span>
+                <input type="number" id="mode0CapacityMah" class="mono" value="3500" min="100" max="50000" step="100" />
+              </label>
+              <label class="k-field" title="Safety timer limit in minutes (0 = OFF, 10–1440 min, default 180 min)">
+                <span>Safety Timer (min, 0 = OFF)</span>
+                <input type="number" id="mode0TimerMin" class="mono" value="180" min="0" max="1440" step="10" placeholder="0 = OFF" />
+              </label>
+            </div>
+
+            <div class="mode-info-box">
+              <strong>Standard Saturation Charge:</strong> Charges cells to cutoff voltage using standard CC/CV saturation with -ΔV peak termination, holding/restart voltage, and trickle maintenance current.
+            </div>
+          </div>
+
+          <!-- Section 3: Mode 1 Discharge -->
+          <div id="sectionModeNativeDischarge" class="mode-param-section" style="display: none;">
+            <div class="race-section-divider">
+              <span class="section-divider-title">DISCHARGE RATES &amp; CUT-OFF</span>
+            </div>
+            <div class="keeper-form-grid grid-2col">
+              <label class="k-field" title="Discharge rate (100–2500 mA)">
+                <span>Discharge Current (mA)</span>
+                <input type="number" id="mode1DischargeMa" class="mono" value="1000" min="100" max="2500" step="50" />
+              </label>
+              <label class="k-field" title="Cut-off voltage to stop discharging (500–1400 mV, default 1000 mV / 1.00V)">
+                <span>Cut-off Voltage (mV)</span>
+                <input type="number" id="mode1CutoffMv" class="mono" value="1000" min="500" max="1400" step="10" />
+              </label>
+            </div>
+
+            <div class="race-section-divider">
+              <span class="section-divider-title">TERMINATION &amp; SAFETY</span>
+            </div>
+            <div class="keeper-form-grid grid-2col">
+              <label class="k-field" title="Discharge stop/termination current (0–2500 mA, default 100 mA)">
+                <span>Stop Current (mA)</span>
+                <input type="number" id="mode1StopCurrentMa" class="mono" value="100" min="0" max="2500" step="50" />
+              </label>
+              <label class="k-field" title="Safety timer limit in minutes (0 = OFF, 10–1440 min, default 180 min)">
+                <span>Safety Timer (min, 0 = OFF)</span>
+                <input type="number" id="mode1TimerMin" class="mono" value="180" min="0" max="1440" step="10" placeholder="0 = OFF" />
+              </label>
+            </div>
+
+            <div class="mode-info-box">
+              <strong>Constant-Current Capacity Benchmark:</strong> Discharges cells at constant current down to cutoff voltage (0.50–1.40V) to measure delivered mAh or prepare batteries for safe storage.
+            </div>
+          </div>
+
+          <!-- Section 4: Mode 3 Cycle / Refresh -->
+          <div id="sectionModeNativeCycle" class="mode-param-section" style="display: none;">
+            <div class="race-section-divider">
+              <span class="section-divider-title">CYCLE SEQUENCE &amp; ITERATIONS</span>
+            </div>
+            <div class="keeper-form-grid grid-2col">
+              <label class="k-field" title="Cycle sequence order: D->C resets memory effect then charges; C->D->C is official Refresh mode">
+                <span>Cycle Sequence</span>
+                <select id="mode3CycleSequence" class="form-select mono">
+                  <option value="0">D -> C (Discharge → Charge)</option>
+                  <option value="1">C -> D (Charge → Discharge)</option>
+                  <option value="2">D -> C -> D</option>
+                  <option value="3" selected>C -> D -> C (Refresh Mode)</option>
+                </select>
+              </label>
+              <label class="k-field" title="Number of repeat cycles (1 to 99)">
+                <span>Cycle Count</span>
+                <input type="number" id="mode3CycleCount" class="mono" value="1" min="1" max="99" step="1" />
+              </label>
+            </div>
+
+            <div class="race-section-divider">
+              <span class="section-divider-title">RATES &amp; VOLTAGE THRESHOLDS</span>
+            </div>
+            <div class="keeper-form-grid grid-2col">
+              <label class="k-field" title="Charge rate during cycling (200–3000 mA)">
+                <span>Charge Current (mA)</span>
+                <input type="number" id="mode3ChargeMa" class="mono" value="1000" min="200" max="3000" step="50" />
+              </label>
+              <label class="k-field" title="Discharge rate during cycling (100–2500 mA)">
+                <span>Discharge Current (mA)</span>
+                <input type="number" id="mode3DischargeMa" class="mono" value="1000" min="100" max="2500" step="50" />
+              </label>
+              <label class="k-field" title="Charge target cut-off voltage (1250–1800 mV, default 1650 mV)">
+                <span>Charge Cut-off (mV)</span>
+                <input type="number" id="mode3CutoffMv" class="mono" value="1650" min="1250" max="1800" step="10" />
+              </label>
+              <label class="k-field" title="Discharge cut-off voltage (500–1400 mV, default 1000 mV)">
+                <span>Discharge Cut-off (mV)</span>
+                <input type="number" id="mode3DischargeCutoffMv" class="mono" value="1000" min="500" max="1400" step="10" />
+              </label>
+              <label class="k-field" title="Safety timer limit in minutes (0 = OFF, 10–1440 min, default 180 min)">
+                <span>Safety Timer (min, 0 = OFF)</span>
+                <input type="number" id="mode3TimerMin" class="mono" value="180" min="0" max="1440" step="10" placeholder="0 = OFF" />
+              </label>
+            </div>
+
+            <div class="race-section-divider">
+              <span class="section-divider-title">PEAK CUTOFF &amp; REST INTERVALS</span>
+            </div>
+            <div class="keeper-form-grid grid-2col">
+              <label class="k-field" title="Negative Delta V peak detection (0 = Disabled, 1–20 mV, default 5 mV)">
+                <span>-ΔV Peak Cutoff (mV)</span>
+                <input type="number" id="mode3DeltaVMv" class="mono" value="5" min="0" max="20" step="1" />
+              </label>
+              <label class="k-field" title="Trickle current after final charge cycle (0 = Off, 10–250 mA, default 30 mA)">
+                <span>Trickle Current (mA)</span>
+                <input type="number" id="mode3TrickleMa" class="mono" value="30" min="0" max="250" step="10" />
+              </label>
+              <label class="k-field" title="Rest time after discharge before charging (1–240 min)">
+                <span>Rest Post-Disch (min)</span>
+                <input type="number" id="mode3RestDischMin" class="mono" value="10" min="1" max="240" step="1" />
+              </label>
+              <label class="k-field" title="Rest time after charging before discharging (1–240 min)">
+                <span>Rest Post-Charge (min)</span>
+                <input type="number" id="mode3RestChargeMin" class="mono" value="10" min="1" max="240" step="1" />
+              </label>
+            </div>
+
+            <div class="mode-info-box">
+              <strong>Multi-Pass Refresh &amp; Memory Wipe:</strong> Automates up to 99 Charge/Discharge cycles with configurable rest intervals to revive tired batteries and benchmark cyclic degradation.
+            </div>
+          </div>
+
+          <!-- Section 5: Mode 2 Break-in (IEC 61951-2) -->
+          <div id="sectionModeNativeBreakin" class="mode-param-section" style="display: none;">
+            <div class="mode-hero-card">
+              <label class="k-field highlight-field" title="Rated battery capacity (e.g. 1000 mAh for NeoChamp, 2000 mAh for Eneloop). Charging &amp; discharging rates automatically scale to 0.1C and 0.2C.">
+                <span class="field-label-accent">Battery Rated Capacity (mAh)</span>
+                <input type="number" id="mode2CapacityMah" class="mono highlight-input" value="1000" min="200" max="5000" step="50" />
+              </label>
+            </div>
+
+            <div class="race-section-divider">
+              <span class="section-divider-title">IEC 61951-2 AUTO-SCALED STAGES</span>
+            </div>
+            <div class="keeper-form-grid grid-3col">
+              <label class="k-field" title="IEC Forming Charge Rate (0.1C: 100mA for 1000mAh, 200mA for 2000mAh)">
+                <span>0.1C Charge (mA)</span>
+                <input type="number" id="mode2ChargeMa" class="mono" value="100" readonly style="opacity: 0.85;" />
+              </label>
+              <label class="k-field" title="IEC Capacity Discharge Rate (0.2C: 200mA for 1000mAh, 400mA for 2000mAh)">
+                <span>0.2C Discharge (mA)</span>
+                <input type="number" id="mode2DischargeMa" class="mono" value="200" readonly style="opacity: 0.85;" />
+              </label>
+              <label class="k-field" title="IEC Rest Time between stages (fixed 60 minutes)">
+                <span>Rest Duration (min)</span>
+                <input type="number" id="mode2RestMin" class="mono" value="60" readonly style="opacity: 0.85;" />
+              </label>
+            </div>
+
+            <div class="mode-info-box">
+              <strong>IEC 61951-2 Standard Conditioning:</strong> 16h forming charge at 0.1C &rarr; 1h rest &rarr; 0.2C discharge to 0.90V (benchmark capacity measurement) &rarr; 1h rest &rarr; 16h final saturation recharge. Recommended for brand-new cells or batteries stored &gt;3 months.
+            </div>
+          </div>
+
+          <!-- Section 6: Mode 5 Turbo Charge -->
+          <div id="sectionModeNativeTurbo" class="mode-param-section" style="display: none;">
+            <div class="mode-hero-card">
+              <label class="k-field highlight-field" title="Selectable Turbo Rapid Charge Level (1.5A to 3.0A Maximum Hardware Punch)">
+                <span class="field-label-accent">Turbo Rapid Charge Level</span>
+                <select id="mode5TurboLevel" class="form-select mono highlight-input">
+                  <option value="0">1500 mA (Turbo 1.5A)</option>
+                  <option value="1">1800 mA (Turbo 1.8A)</option>
+                  <option value="2">2000 mA (Turbo 2.0A)</option>
+                  <option value="3">2500 mA (Turbo 2.5A)</option>
+                  <option value="4" selected>3000 mA (Turbo 3.0A Max)</option>
+                </select>
+                <input type="hidden" id="mode5ChargeMa" value="3000" />
+              </label>
+            </div>
+
+            <div class="race-section-divider">
+              <span class="section-divider-title">TERMINATION &amp; SENSITIVITY</span>
+            </div>
+            <div class="keeper-form-grid grid-2col">
+              <label class="k-field" title="Cut-off voltage (1250–1800 mV, default 1650 mV)">
+                <span>Cut-off Voltage (mV)</span>
+                <input type="number" id="mode5CutoffMv" class="mono" value="1650" min="1250" max="1800" step="10" />
+              </label>
+              <label class="k-field" title="-ΔV peak detection sensitivity (1–20 mV, default 4 mV)">
+                <span>-ΔV Peak Cutoff (mV)</span>
+                <input type="number" id="mode5DeltaVMv" class="mono" value="4" min="1" max="20" step="1" />
+              </label>
+            </div>
+
+            <div class="mode-info-box">
+              <strong>Active IR Throttling:</strong> Turbo mode delivers up to 3.0A rapid charge with hardware thermal monitoring. If cell internal resistance or temperature spikes, the STM32 firmware automatically throttles current to prevent damage.
+            </div>
+          </div>
+
+          <!-- Section 7: Mode 6 3-Stage Charging -->
+          <div id="sectionModeNativeThreeStage" class="mode-param-section" style="display: none;">
+            <div class="race-section-divider">
+              <span class="section-divider-title">STAGE 1: HIGH-PUNCH BULK CHARGE</span>
+            </div>
+            <div class="keeper-form-grid grid-2col">
+              <label class="k-field" title="Stage 1 High Current (1000–3000 mA)">
+                <span>Stage 1 Current (mA)</span>
+                <input type="number" id="mode6Stage1Ma" class="mono" value="2000" min="1000" max="3000" step="50" />
+              </label>
+              <label class="k-field" title="Percentage of capacity before stepping down (50–90%, default 80%)">
+                <span>Stage 1 Transition (%)</span>
+                <input type="number" id="mode6Stage1Pct" class="mono" value="80" min="50" max="90" step="5" />
+              </label>
+            </div>
+
+            <div class="race-section-divider">
+              <span class="section-divider-title">STAGE 2: SATURATION STEP-DOWN</span>
+            </div>
+            <div class="keeper-form-grid grid-2col">
+              <label class="k-field" title="Stage 2 Step-down Current (200–1500 mA)">
+                <span>Stage 2 Current (mA)</span>
+                <input type="number" id="mode6Stage2Ma" class="mono" value="800" min="200" max="1500" step="50" />
+              </label>
+              <label class="k-field" title="Final Saturation Target Voltage (1250–1800 mV, default 1600 mV)">
+                <span>Cut-off Voltage (mV)</span>
+                <input type="number" id="mode6CutoffMv" class="mono" value="1600" min="1250" max="1800" step="10" />
+              </label>
+            </div>
+
+            <div class="race-section-divider">
+              <span class="section-divider-title">STAGE 3: TERMINATION &amp; TRICKLE</span>
+            </div>
+            <div class="keeper-form-grid grid-2col">
+              <label class="k-field" title="Negative Delta V peak detection cutoff (0 = Disabled, 1–20 mV, default 4 mV)">
+                <span>-ΔV Peak Cutoff (mV)</span>
+                <input type="number" id="mode6DeltaVMv" class="mono" value="4" min="0" max="20" step="1" />
+              </label>
+              <label class="k-field" title="Stage 3 trickle maintenance current after step-down (0 = Off, 10–250 mA, default 30 mA)">
+                <span>Stage 3 Trickle (mA)</span>
+                <input type="number" id="mode6TrickleMa" class="mono" value="30" min="0" max="250" step="10" />
+              </label>
+            </div>
+
+            <div class="mode-info-box">
+              <strong>Step-Charging:</strong> Charges quickly up to 80% with minimal heat, then steps down to 800mA for gentle saturation and 30mA trickle, maximizing punch while preserving battery longevity.
+            </div>
+          </div>
+
+          <!-- Section 8: Mode 4 MaxBoost -->
+          <div id="sectionModeNativeMaxBoost" class="mode-param-section" style="display: none;">
+            <div class="race-section-divider">
+              <span class="section-divider-title">WAKEUP BOOST PULSE</span>
+            </div>
+            <div class="keeper-form-grid grid-2col">
+              <label class="k-field highlight-field" title="MaxBoost capacity ceiling limit (100–500 mAh, default 300 mAh)">
+                <span class="field-label-accent">Boost Capacity (mAh)</span>
+                <input type="number" id="mode4CapacityMah" class="mono highlight-input" value="300" min="100" max="500" step="25" />
+              </label>
+              <label class="k-field" title="Boost current (200–2000 mA)">
+                <span>Boost Current (mA)</span>
+                <input type="number" id="mode4ChargeMa" class="mono" value="1000" min="200" max="2000" step="50" />
+              </label>
+            </div>
+
+            <div class="race-section-divider">
+              <span class="section-divider-title">RECOVERY TERMINATION</span>
+            </div>
+            <div class="keeper-form-grid grid-2col">
+              <label class="k-field" title="Charge cut-off voltage (1250–1800 mV, default 1650 mV)">
+                <span>Cut-off Voltage (mV)</span>
+                <input type="number" id="mode4CutoffMv" class="mono" value="1650" min="1250" max="1800" step="10" />
+              </label>
+              <label class="k-field" title="-ΔV peak detection sensitivity (0 = Disabled, 1–20 mV, default 4 mV)">
+                <span>-ΔV Peak Cutoff (mV)</span>
+                <input type="number" id="mode4DeltaVMv" class="mono" value="4" min="0" max="20" step="1" />
+              </label>
+            </div>
+
+            <div class="mode-info-box">
+              <strong>Zero-Volt Sleeping Cell Recovery:</strong> Delivers pulsed boost current to overcome passive surface passivation layers and wake up deeply discharged cells that standard smart chargers refuse to detect.
+            </div>
+          </div>
+
+          <!-- Global Common Parameters -->
+          <div class="global-common-section">
+            <div class="race-section-divider">
+              <span class="section-divider-title">GLOBAL HARDWARE SAFETY &amp; SENSORS</span>
+            </div>
+            <div class="temp-protect-panel">
+              <label class="k-field temp-protect-field" title="40–70°C sets temperature cutoff; 71 (0x47) sets Temp Cutoff = OFF in NC3000 Pro firmware (0x0800FD68) to bypass a drifted/false slot NTC thermistor sensor.">
+                <div class="temp-field-header">
+                  <span class="field-label-accent">Slot NTC Thermal Protection</span>
+                  <span class="field-subnote mono" id="tempCutoffNote">71 = OFF (NTC Bypass)</span>
+                </div>
+                <div class="temp-input-wrap">
+                  <input type="number" id="keeperTempProtectC" class="mono temp-input" value="71" min="40" max="71" step="1" />
+                  <span class="race-unit-affix">°C</span>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div class="keeper-slot-toggles">
+            <span class="preset-label">Active Slots:</span>
+            <label class="slot-check"><input type="checkbox" class="keeper-slot-chk" id="chkSlot1" data-slot="0" checked /> <span>Slot 1</span></label>
+            <label class="slot-check"><input type="checkbox" class="keeper-slot-chk" id="chkSlot2" data-slot="1" checked /> <span>Slot 2</span></label>
+            <label class="slot-check"><input type="checkbox" class="keeper-slot-chk" id="chkSlot3" data-slot="2" checked /> <span>Slot 3</span></label>
+            <label class="slot-check"><input type="checkbox" class="keeper-slot-chk" id="chkSlot4" data-slot="3" checked /> <span>Slot 4</span></label>
+          </div>
+
+          <div class="keeper-audio-row">
+            <div class="audio-row-info">
+              <span class="preset-label">Audio Alerts &amp; Chimes:</span>
+              <span class="keeper-note">Plays tones on match ready and defective cell warnings</span>
+            </div>
+            <button type="button" id="btnToggleAudio" class="btn small" title="Toggle audio chimes on match ready and warning beeps on defective cells">🔊 Sound: ON</button>
+          </div>
+
+          <!-- NC3000 Hardware System Settings Card (Reverse Engineered from Dalvik APK 0x95/0x96) -->
+          <div class="keeper-section-card hw-settings-card" id="hwSettingsCard">
+            <div class="section-card-header">
+              <div class="section-card-title-group">
+                <span class="badge keeper-badge">HARDWARE</span>
+                <h4>NC3000 System &amp; Buzzer Settings</h4>
+              </div>
+              <span class="preset-badge mono">0x95 / 0x96</span>
+            </div>
+            <p class="section-card-desc">
+              Synchronize physical NC3000 charger buzzer volume, keypress beeps, screen backlight sleep timeout, and security PIN.
+            </p>
+
+            <div class="keeper-form-grid hw-form-grid">
+              <!-- Keypress Beep -->
+              <label class="k-field">
+                <span>Keypress Beep</span>
+                <select id="hwSettingKeypressBeep" class="mono">
+                  <option value="1" selected>🔊 Enabled (On)</option>
+                  <option value="0">🔇 Disabled (Mute)</option>
+                </select>
+              </label>
+
+              <!-- Beep Volume / Notification Loudness -->
+              <label class="k-field">
+                <span>Notify Beep Volume</span>
+                <select id="hwSettingNotifyBeep" class="mono">
+                  <option value="0">🔇 Mute / Off</option>
+                  <option value="1">🔈 Low</option>
+                  <option value="2" selected>🔉 Medium (Default)</option>
+                  <option value="3">🔊 High</option>
+                </select>
+              </label>
+
+              <!-- Screen Timeout -->
+              <label class="k-field">
+                <span>Screen Timeout</span>
+                <select id="hwSettingSleepTime" class="mono">
+                  <option value="0">Always ON (No Sleep)</option>
+                  <option value="1">1 Minute</option>
+                  <option value="2">3 Minutes</option>
+                  <option value="3" selected>5 Minutes (Default)</option>
+                  <option value="4">10 Minutes</option>
+                  <option value="5">15 Minutes</option>
+                  <option value="6">30 Minutes</option>
+                  <option value="7">60 Minutes</option>
+                  <option value="8">120 Minutes</option>
+                </select>
+              </label>
+
+              <!-- LCD Backlight Level -->
+              <label class="k-field">
+                <span>LCD Backlight Level</span>
+                <select id="hwSettingLcd" class="mono">
+                  <option value="0">Off</option>
+                  <option value="1">Low</option>
+                  <option value="2" selected>High (Default)</option>
+                </select>
+              </label>
+
+              <!-- End of Charge Beep -->
+              <label class="k-field">
+                <span>End Charge Chime</span>
+                <select id="hwSettingEndNotifyBeep" class="mono">
+                  <option value="0" selected>Single Chime (1 Time)</option>
+                  <option value="1">Continuous Chime (Repeat)</option>
+                </select>
+              </label>
+
+              <!-- Safety Warning Alarm -->
+              <label class="k-field">
+                <span>Safety Alarm Buzzer</span>
+                <select id="hwSettingWarning" class="mono">
+                  <option value="1" selected>Enabled (Safety Ceilings)</option>
+                  <option value="0">Disabled</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="hw-settings-action-row">
+              <button type="button" id="btnPushHwSettings" class="btn small primary" title="Write these system parameters to the physical NC3000 charger (0x95)">⚡ Apply to Charger</button>
+              <button type="button" id="btnQueryHwSettings" class="btn small" title="Read current hardware settings from NC3000 charger (0x96)">🔄 Query Charger</button>
+              <button type="button" id="btnChangeHwPin" class="btn small" title="Change 4-digit BLE device lock PIN (0x56)">🔒 Change PIN</button>
+              <button type="button" id="btnFactoryResetHw" class="btn small danger" title="Restore NC3000 charger to factory default EEPROM settings (0x97)">⚠️ Factory Reset</button>
+            </div>
+          </div>
+
+          <div class="keeper-fan-note">
+            <span class="fan-icon">ℹ️</span>
+            <span><strong>Sensor Bypass &amp; Thermal Notice:</strong> Setting <code>Temp Cutoff = 71</code> (<code>0x47 = OFF</code> in firmware <code>0x0800FD68</code>) disables the programmable 40–70°C slot NTC cutoff so a drifted slot sensor (causing false <em>Cut-off Temp. Reached!</em> on a cold cell) is bypassed up to the 80°C hardware emergency ceiling.</span>
+          </div>
+
+          <!-- Application Version & Deployment Info Card -->
+          <div class="keeper-version-card">
+            <div class="version-card-main">
+              <span class="version-card-title">DEPLOYED VERSION</span>
+              <div class="version-number-row">
+                <span class="version-pill mono" id="appVersionBadge">v1.2.17</span>
+                <span class="version-meta mono" id="appBuildMeta">Build 41 (2026.11.13)</span>
+              </div>
+            </div>
+            <div class="version-card-status" title="Target: Firebase Hosting (nc3000pro-ui)">
+              <span class="version-status-indicator"></span>
+              <span class="version-channel mono">production</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="drawer-footer">
+        <button type="button" id="btnApplyConfig" class="btn primary full-width">Save &amp; Close Settings</button>
+        <div class="drawer-version-footer mono">
+          <span>SkyRC NC3000 Pro WebUI <strong id="drawerVersionFooter">v1.2.17</strong></span>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Toast Notification Container (Custom Replacement for window alerts) -->
+  <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- Custom Confirmation / Prompt Modal Dialog (Replacement for window.confirm & window.prompt) -->
+  <div id="customModalOverlay" class="custom-modal-overlay hidden" aria-hidden="true">
+    <div class="custom-modal-backdrop" id="customModalBackdrop"></div>
+    <div class="custom-modal-card" role="dialog" aria-modal="true" aria-labelledby="customModalTitle">
+      <div class="custom-modal-header">
+        <h4 id="customModalTitle" class="custom-modal-title">Confirmation</h4>
+        <button type="button" id="customModalClose" class="custom-modal-close" aria-label="Close">&times;</button>
+      </div>
+      <div class="custom-modal-body">
+        <p id="customModalMessage" class="custom-modal-message"></p>
+        <div id="customModalInputWrap" class="custom-modal-input-wrap hidden">
+          <input type="text" id="customModalInput" class="custom-modal-input mono" spellcheck="false" />
+        </div>
+      </div>
+      <div class="custom-modal-footer">
+        <button type="button" id="customModalCancel" class="btn small secondary">Cancel</button>
+        <button type="button" id="customModalConfirm" class="btn small primary">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="chart.umd.min.js"></script>
+  <script src="gsap.min.js"></script>
+  <script src="app.js?v=1.2.17"></script>
+</body>
+</html>

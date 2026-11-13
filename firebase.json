@@ -1,0 +1,41 @@
+{
+  "hosting": {
+    "public": ".",
+    "ignore": [
+      "firebase.json",
+      ".firebaserc",
+      "**/.*",
+      "**/.*/**",
+      "**/node_modules/**",
+      "research_and_learnings",
+      "research_and_learnings/**",
+      "research",
+      "research/**",
+      "tests",
+      "tests/**",
+      "apk",
+      "apk/**",
+      "firmware",
+      "firmware/**",
+      "scratch",
+      "scratch/**",
+      "captures",
+      "captures/**",
+      "server.js",
+      "package*.json",
+      "*.log",
+      "*.tmp"
+    ],
+    "headers": [
+      {
+        "source": "**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, no-store, must-revalidate"
+          }
+        ]
+      }
+    ]
+  }
+}
