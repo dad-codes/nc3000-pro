@@ -253,6 +253,44 @@ async def run_slot_tests():
         # Restore back to all 4 slots
         await page.click("#btnSelectAllSlots")
 
+        print("--- TEST 9: Settings & Preset Overwrite Persistence Across Reload ---")
+        # 1. Open config drawer, select a preset, modify a setting, reload, and verify edit is NOT overwritten by preset
+        await page.click("#btnOpenConfig")
+        await page.select_option("#keeperProfileSelect", "race_ready_300")
+        await page.fill("#keeperChargeMa", "1250")
+        await page.dispatch_event("#keeperChargeMa", "input")
+        await page.reload(wait_until="networkidle")
+
+        edited_after_reload = await page.evaluate('''() => ({
+            mode: document.getElementById("keeperWorkingMode")?.value,
+            chargeMa: document.getElementById("keeperChargeMa")?.value,
+            activeProf: localStorage.getItem("skyrc_nc3000_active_profile")
+        })''')
+        print(f"Edited state after reload: {edited_after_reload}")
+        assert edited_after_reload["mode"] == "RACE_READY"
+        assert edited_after_reload["chargeMa"] == "1250", "User edit must persist across reload even when a preset was active"
+        assert edited_after_reload["activeProf"] == "race_ready_300"
+
+        # 2. Open config drawer, overwrite the preset, switch away, switch back, and reload to verify preset overwrite persists
+        await page.click("#btnOpenConfig")
+        await page.fill("#keeperChargeMa", "1150")
+        await page.dispatch_event("#keeperChargeMa", "input")
+        await page.click("#btnOverwriteProfile")
+        await page.select_option("#keeperProfileSelect", "race_ready_290")
+        await page.select_option("#keeperProfileSelect", "race_ready_300")
+        await page.reload(wait_until="networkidle")
+
+        overwritten_after_reload = await page.evaluate('''() => ({
+            chargeMa: document.getElementById("keeperChargeMa")?.value,
+            savedProfiles: JSON.parse(localStorage.getItem(STORAGE_PROFILES_KEY) || "[]")
+                .find(p => p.id === "race_ready_300")?.params?.chargeMa,
+            defaultTemplateChargeMa: DEFAULT_PROFILES.find(p => p.id === "race_ready_300")?.params?.chargeMa
+        })''')
+        print(f"Overwritten preset state after reload: {overwritten_after_reload}")
+        assert overwritten_after_reload["chargeMa"] == "1150"
+        assert overwritten_after_reload["savedProfiles"] == 1150
+        assert overwritten_after_reload["defaultTemplateChargeMa"] != 1150, "DEFAULT_PROFILES template must not be mutated in-place"
+
         print("--- ALL SLOT CONFIGURATION TESTS PASSED SUCCESSFULLY! ---")
         await browser.close()
 
