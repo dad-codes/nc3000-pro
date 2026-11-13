@@ -1,6 +1,6 @@
 // SkyRC NC3000 Pro — BLE Reverse Engineering & Firmware Workbench
-const APP_VERSION = "v1.2.22";
-const APP_BUILD_DATE = "Build 46 (2026.11.13)";
+const APP_VERSION = "v1.2.23";
+const APP_BUILD_DATE = "Build 47 (2026.11.14)";
 window.APP_VERSION = APP_VERSION;
 window.APP_BUILD_DATE = APP_BUILD_DATE;
 
@@ -1598,14 +1598,18 @@ function updateProfileButtonsState() {
   }
 }
 
+function cloneDefaultProfiles() {
+  return JSON.parse(JSON.stringify(DEFAULT_PROFILES));
+}
+
 function loadProfiles() {
   try {
     const raw = localStorage.getItem(STORAGE_PROFILES_KEY);
-    if (!raw) return DEFAULT_PROFILES.slice();
+    if (!raw) return cloneDefaultProfiles();
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : DEFAULT_PROFILES.slice();
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : cloneDefaultProfiles();
   } catch (_) {
-    return DEFAULT_PROFILES.slice();
+    return cloneDefaultProfiles();
   }
 }
 
@@ -1986,6 +1990,8 @@ function overwriteCurrentProfile() {
   profiles[idx].params = getCurrentModeParams(currentMode);
 
   saveProfiles(profiles);
+  try { localStorage.setItem("skyrc_nc3000_active_profile", profileId); } catch (_) {}
+  saveKeeperPrefs();
   appendLog("SYS", null, null, `Overwrote profile settings for: "${profiles[idx].name}".`);
 
   if (window.gsap) {
@@ -2019,7 +2025,7 @@ async function deleteCurrentProfile() {
   if (!confirmed) return;
 
   const filtered = profiles.filter((p) => p.id !== profileId);
-  saveProfiles(filtered.length > 0 ? filtered : DEFAULT_PROFILES.slice());
+  saveProfiles(filtered.length > 0 ? filtered : cloneDefaultProfiles());
   populateProfileSelect();
   const remaining = loadProfiles();
   if (remaining.length > 0) {
@@ -2036,7 +2042,7 @@ async function resetDefaultProfiles() {
     isDanger: true
   });
   if (!confirmed) return;
-  saveProfiles(DEFAULT_PROFILES.slice());
+  saveProfiles(cloneDefaultProfiles());
   populateProfileSelect();
   applyProfile(DEFAULT_PROFILES[0].id);
   appendLog("SYS", null, null, "All profiles reset to factory defaults.");
@@ -5417,16 +5423,26 @@ window.addEventListener("DOMContentLoaded", () => {
 
   // Initialize Profile Manager & Mode Switcher
   populateProfileSelect();
+  let hasSavedPrefs = false;
+  try {
+    hasSavedPrefs = !!localStorage.getItem(STORAGE_KEY);
+  } catch (_) {}
+
   try {
     const savedActiveProf = localStorage.getItem("skyrc_nc3000_active_profile");
     if (savedActiveProf) {
       const select = document.getElementById("keeperProfileSelect");
       if (select && Array.from(select.options).some(o => o.value === savedActiveProf)) {
         select.value = savedActiveProf;
-        applyProfile(savedActiveProf);
+        // Only apply the preset on first load when no user prefs exist yet;
+        // otherwise keep the user's persisted edits from loadKeeperPrefs().
+        if (!hasSavedPrefs) {
+          applyProfile(savedActiveProf);
+        }
       }
     }
   } catch (_) {}
+  updateProfileButtonsState();
 
   const currentMode = document.getElementById("keeperWorkingMode")?.value || "RACE_READY";
   switchWorkingMode(currentMode, false);
