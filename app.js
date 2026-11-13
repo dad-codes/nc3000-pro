@@ -1,6 +1,6 @@
 // SkyRC NC3000 Pro — BLE Reverse Engineering & Firmware Workbench
-const APP_VERSION = "v1.2.17";
-const APP_BUILD_DATE = "Build 41 (2026.11.13)";
+const APP_VERSION = "v1.2.18";
+const APP_BUILD_DATE = "Build 42 (2026.11.13)";
 window.APP_VERSION = APP_VERSION;
 window.APP_BUILD_DATE = APP_BUILD_DATE;
 
@@ -103,8 +103,8 @@ if (typeof document !== "undefined" && document.body) {
 }
 
 // UI Elements
-const statusIndicator = document.getElementById("statusIndicator");
-const statusText = document.getElementById("statusText");
+const statusIndicator = document.getElementById("keeperGlobalStatus") || document.getElementById("statusIndicator");
+const statusText = document.getElementById("keeperStatusText") || document.getElementById("statusText");
 const acceptAllDevicesEl = document.getElementById("acceptAllDevices");
 const btnConnect = document.getElementById("btnConnect");
 const btnDisconnect = document.getElementById("btnDisconnect");
@@ -402,8 +402,10 @@ function appendLog(direction, charUuid, bytes, note = "") {
 }
 
 function setStatus(state, text) {
-  statusIndicator.className = `status-pill ${state}`;
-  statusText.textContent = text;
+  const pill = document.getElementById("keeperGlobalStatus") || statusIndicator;
+  const txt = document.getElementById("keeperStatusText") || statusText;
+  if (pill) pill.className = `status-pill ${state}`;
+  if (txt) txt.textContent = text;
   const isConnected = state === "connected";
   document.body.classList.toggle("ble-connected", isConnected);
   if (btnConnect) {

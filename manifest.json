@@ -2,7 +2,7 @@
   "name": "SkyRC NC3000 Pro Custom Interface",
   "short_name": "NC3000 Pro",
   "description": "An unofficial web interface to control the SkyRC NC3000 Pro and adds a battery charger/discharger function",
-  "version": "1.2.17",
+  "version": "1.2.18",
   "start_url": "./index.html",
   "display": "standalone",
   "orientation": "any",

@@ -2343,7 +2343,8 @@ body.pit-mode #btnTogglePitMode {
     align-items: center;
   }
 
-  .connection-controls #statusIndicator {
+  .connection-controls #statusIndicator,
+  .connection-controls #keeperGlobalStatus {
     grid-column: span 1;
     justify-content: center;
     min-height: 38px;

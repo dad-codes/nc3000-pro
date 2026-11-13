@@ -2,7 +2,7 @@
 
 [![Deploy to Firebase Hosting](https://img.shields.io/badge/Deploy-Firebase%20Hosting-blue.svg)](https://nc3000pro-ui.web.app)
 [![Web Bluetooth API](https://img.shields.io/badge/Bluetooth-Web%20BLE%20API-orange.svg)](https://developer.mozilla.org/en-US/docs/Web/API/Web_Bluetooth_API)
-[![Release](https://img.shields.io/badge/Release-v1.2.17%20Build%2041-brightgreen.svg)](https://nc3000pro-ui.web.app)
+[![Release](https://img.shields.io/badge/Release-v1.2.18%20Build%2042-brightgreen.svg)](https://nc3000pro-ui.web.app)
 [![Tests](https://img.shields.io/badge/Tests-100%25%20Passing-success.svg)](tests/)
 
 A web interface for the SkyRC NC3000 Pro (SK-100209) AA/AAA charger. It controls charging, discharging, and battery matching for Mini 4WD cars over Web Bluetooth, with live charts and full access to the charger's native operating modes.
