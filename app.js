@@ -1,6 +1,6 @@
 // SkyRC NC3000 Pro — BLE Reverse Engineering & Firmware Workbench
-const APP_VERSION = "v1.2.21";
-const APP_BUILD_DATE = "Build 45 (2026.11.13)";
+const APP_VERSION = "v1.2.22";
+const APP_BUILD_DATE = "Build 46 (2026.11.13)";
 window.APP_VERSION = APP_VERSION;
 window.APP_BUILD_DATE = APP_BUILD_DATE;
 
@@ -463,11 +463,17 @@ async function connectBle() {
     btnConnect.disabled = true;
     btnDisconnect.disabled = false;
     btnReadAll.disabled = false;
+    if (typeof window.logAnalyticsEvent === "function") {
+      window.logAnalyticsEvent("ble_connected", { device_name: bleDevice.name || "NC3000 Pro" });
+    }
 
     await enumerateGatt();
   } catch (err) {
     setStatus("disconnected", "Disconnected");
     appendLog("ERR", null, null, `Connection failed: ${err.message}`);
+    if (typeof window.logAnalyticsEvent === "function") {
+      window.logAnalyticsEvent("ble_connect_error", { error: err.message });
+    }
   }
 }
 
@@ -476,6 +482,9 @@ function onDisconnected() {
   stopTelemetryPoller();
   if (keeperState.active) {
     stopAutoKeeper(false);
+  }
+  if (typeof window.logAnalyticsEvent === "function") {
+    window.logAnalyticsEvent("ble_disconnected");
   }
   setStatus("disconnected", "Disconnected");
   btnConnect.disabled = false;
@@ -4154,6 +4163,13 @@ async function startAutoKeeper() {
   keeperState.pairs[1].active = cfg.enabledSlots[2] || cfg.enabledSlots[3];
   keeperState.active = true;
 
+  if (typeof window.logAnalyticsEvent === "function") {
+    window.logAnalyticsEvent("keeper_started", {
+      mode: cfg.mode,
+      active_slots_count: activeSlots.length
+    });
+  }
+
   // Initialize slot states
   const now = Date.now();
   for (let i = 0; i < 4; i++) {
@@ -5146,6 +5162,9 @@ function exportTelemetryCsv(slotIdx) {
     : `nc3000-telemetry-slot${targetSlot + 1}-${Date.now()}.csv`;
   downloadBlob(blob, filename);
   showToast(`✅ Exported ${rows.length - 1} telemetry rows to ${filename}`);
+  if (typeof window.logAnalyticsEvent === "function") {
+    window.logAnalyticsEvent("telemetry_export", { format: "csv", target_slot: targetSlot });
+  }
 }
 
 function exportTelemetryJson() {
@@ -5165,6 +5184,9 @@ function exportTelemetryJson() {
   const filename = `nc3000-telemetry-session-${Date.now()}.json`;
   downloadBlob(blob, filename);
   showToast(`✅ Exported full telemetry session JSON`);
+  if (typeof window.logAnalyticsEvent === "function") {
+    window.logAnalyticsEvent("telemetry_export", { format: "json" });
+  }
 }
 
 /* ==========================================================================
