@@ -1,6 +1,6 @@
 // SkyRC NC3000 Pro — BLE Reverse Engineering & Firmware Workbench
-const APP_VERSION = "v1.2.20";
-const APP_BUILD_DATE = "Build 44 (2026.11.13)";
+const APP_VERSION = "v1.2.21";
+const APP_BUILD_DATE = "Build 45 (2026.11.13)";
 window.APP_VERSION = APP_VERSION;
 window.APP_BUILD_DATE = APP_BUILD_DATE;
 
@@ -642,27 +642,29 @@ async function enumerateGatt() {
     services: sessionRecord.services
   });
 
-  // Automatically query slot telemetry and device info after subscribing to 0xFFE1
+  // Automatically send safe read-only getDeviceInfo (0x57) handshake after subscribing to 0xFFE1
   if (writableChars.some((u) => u.includes("ffe1"))) {
     setTimeout(async () => {
-      appendLog("SYS", null, null, "Querying live NC3000 Pro slot telemetry & device status…");
-      // Poll all 4 slots immediately upon connection so running modes & active cells are detected without delay
-      await pollAllFourSlotsOnce();
-      startTelemetryPoller();
-
-      // Read device information and bootloader version in background
+      appendLog("SYS", null, null, "Sending verified read-only getDeviceInfo (0x57) handshake…");
       await sendBytes(
         hexToBytes("0F 13 57 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 58"),
         "[Auto Handshake: getDeviceInfo MTU=true]"
       );
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 250));
       await sendBytes(
         hexToBytes("0F 13 57 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 57"),
         "[Auto Handshake: getDeviceInfo MTU=false]"
       );
-      await new Promise((r) => setTimeout(r, 200));
+      await new Promise((r) => setTimeout(r, 250));
       await sendBytes(hexToBytes("0F 03 66 00 66"), "[Auto Handshake: checkBootVer (0x66)]");
-    }, 150);
+      await new Promise((r) => setTimeout(r, 250));
+      // Poll all 4 slots so live telemetry and active programs are detected across all 4 terminals
+      appendLog("SYS", null, null, "Querying live NC3000 Pro slot telemetry across all 4 terminals…");
+      await pollAllFourSlotsOnce();
+      // Continuous background slot telemetry poller starts immediately upon BLE connection
+      // so inserted batteries and live voltages are detected even when the system is idle.
+      startTelemetryPoller();
+    }, 350);
   }
 }
 
@@ -717,6 +719,7 @@ async function readCharacteristicValue(cUuid) {
 }
 
 let rxReassemblyBuffer = new Uint8Array(0);
+let rxReassemblyTimer = null;
 
 function onNotification(cUuid, dataView) {
   const bytes = new Uint8Array(dataView.buffer, dataView.byteOffset, dataView.byteLength);
@@ -744,28 +747,48 @@ function onNotification(cUuid, dataView) {
     document.getElementById("binBufferSize").textContent = `${binaryDumpTotalBytes} bytes`;
   }
 
-  // BLE Notification Reassembly:
-  // SkyRC frames begin with 0x0F, followed by byte length `L`. The total frame is `L + 3` bytes.
-  // In MTU-constrained BLE environments (e.g. 20-byte MTU limit), a 22-byte 0x91 telemetry
-  // frame can be split across Chunk 1 (20B) and Chunk 2 (2B). Reassemble contiguous frames before dispatch.
+  // BLE Notification Handling:
+  // On real hardware, every notification delivered over Web Bluetooth is a complete frame (20B, 21B, or 22B).
+  // If a frame is already complete (>=20B or matches checksum), process it immediately without buffering.
+  // In split-chunk scenarios (e.g. 20B Chunk 1 + 2B Chunk 2), reassemble before dispatching to appendLog.
   let frameToProcess = bytes;
+
   if (rxReassemblyBuffer.length > 0) {
-    const merged = new Uint8Array(rxReassemblyBuffer.length + bytes.length);
-    merged.set(rxReassemblyBuffer, 0);
-    merged.set(bytes, rxReassemblyBuffer.length);
-    const expectedLen = merged.length >= 2 ? merged[1] + 3 : 0;
-    if (expectedLen > 0 && merged.length >= expectedLen) {
-      frameToProcess = merged.slice(0, expectedLen);
-      rxReassemblyBuffer = merged.slice(expectedLen);
+    // If incoming packet begins with 0x0F and is >= 20B, it is a brand-new frame, not a continuation.
+    // Discard stale buffer to prevent cross-frame corruption.
+    if (bytes[0] === 0x0f && bytes.length >= 20) {
+      rxReassemblyBuffer = new Uint8Array(0);
+      if (rxReassemblyTimer) {
+        clearTimeout(rxReassemblyTimer);
+        rxReassemblyTimer = null;
+      }
     } else {
-      rxReassemblyBuffer = merged;
-      return; // Waiting for remainder of frame
+      const merged = new Uint8Array(rxReassemblyBuffer.length + bytes.length);
+      merged.set(rxReassemblyBuffer, 0);
+      merged.set(bytes, rxReassemblyBuffer.length);
+      rxReassemblyBuffer = new Uint8Array(0);
+      if (rxReassemblyTimer) {
+        clearTimeout(rxReassemblyTimer);
+        rxReassemblyTimer = null;
+      }
+      frameToProcess = merged;
     }
-  } else if (bytes[0] === 0x0f && bytes.length >= 2) {
-    const expectedLen = bytes[1] + 3;
-    if (bytes.length < expectedLen) {
+  } else if (bytes[0] === 0x0f && bytes.length === 20 && bytes[1] === 0x13) {
+    // Potential 20B chunk of a 22B frame: check if byte 19 is a valid checksum of bytes[2..18]
+    let sum = 0;
+    for (let i = 2; i < 19; i++) sum = (sum + bytes[i]) & 0xff;
+    if (sum !== bytes[19]) {
+      // Not a standalone 20B frame with checksum; buffer for remaining chunk with 100ms safety timeout
       rxReassemblyBuffer = new Uint8Array(bytes);
-      return; // Waiting for remainder of frame
+      rxReassemblyTimer = setTimeout(() => {
+        if (rxReassemblyBuffer.length > 0) {
+          const timeoutFrame = rxReassemblyBuffer;
+          rxReassemblyBuffer = new Uint8Array(0);
+          rxReassemblyTimer = null;
+          appendLog("RX", cUuid, timeoutFrame, "(Notification)");
+        }
+      }, 100);
+      return;
     }
   }
 
@@ -2262,7 +2285,7 @@ function maskToSlotIndex(mask) {
 
 // Exact decoder for 0x91 response based on NcBean.setNc3000Data(byte[]) in apk/classes4.dex
 function parseAndApplyNc3000SlotTelemetry(bytes) {
-  if (!bytes || bytes.length < 19) return null;
+  if (!bytes || bytes.length < 18) return null;
 
   const mask = bytes[3] & 0xff;
   const slotIdx = maskToSlotIndex(mask);
@@ -2274,17 +2297,42 @@ function parseAndApplyNc3000SlotTelemetry(bytes) {
   const deltaVMv = ((bytes[8] & 0xff) << 8) | (bytes[9] & 0xff);
   const capacityMah = ((bytes[10] & 0xff) << 8) | (bytes[11] & 0xff);
 
-  // In NC3000 Pro firmware, the slot telemetry struct always formats:
-  // [12..15]=uint32 duration (sec), [16..17]=uint16 IR (mOhm), [18]=chargerStatu, [19]=mode, [20]=errorState
-  const durationSec =
-    ((bytes[12] & 0xff) * 16777216) +
-    ((bytes[13] & 0xff) << 16) +
-    ((bytes[14] & 0xff) << 8) +
-    (bytes[15] & 0xff);
-  const irMohm = bytes.length >= 18 ? (((bytes[16] & 0xff) << 8) | (bytes[17] & 0xff)) : 0;
-  const chargerStatu = bytes.length >= 19 ? (bytes[18] & 0xff) : 0;
-  const mode = bytes.length >= 20 ? (bytes[19] & 0xff) : 0;
-  const errorState = bytes.length >= 21 ? (bytes[20] & 0xff) : 0;
+  let durationSec = 0;
+  let irMohm = 0;
+  let chargerStatu = 0;
+  let mode = 0;
+  let errorState = 0;
+
+  // Determine if frame has 16-bit or 32-bit duration:
+  // In 20-byte legacy frames where bytes[19] is checksum of bytes[2..18]:
+  // [12..13] = duration, [14..15] = IR, [16] = status, [17] = mode, [18] = error, [19] = checksum
+  let is16BitDuration = false;
+  if (bytes.length === 20) {
+    let sum = 0;
+    for (let i = 2; i < 19; i++) sum = (sum + bytes[i]) & 0xff;
+    if (sum === bytes[19]) {
+      is16BitDuration = true;
+    }
+  }
+
+  if (is16BitDuration) {
+    durationSec = ((bytes[12] & 0xff) << 8) | (bytes[13] & 0xff);
+    irMohm = ((bytes[14] & 0xff) << 8) | (bytes[15] & 0xff);
+    chargerStatu = bytes[16] & 0xff;
+    mode = bytes[17] & 0xff;
+    errorState = bytes[18] & 0xff;
+  } else {
+    // NC3000 Pro layout with 32-bit duration
+    durationSec =
+      ((bytes[12] & 0xff) * 16777216) +
+      ((bytes[13] & 0xff) << 16) +
+      ((bytes[14] & 0xff) << 8) +
+      (bytes[15] & 0xff);
+    irMohm = bytes.length >= 18 ? (((bytes[16] & 0xff) << 8) | (bytes[17] & 0xff)) : 0;
+    chargerStatu = bytes.length >= 19 ? (bytes[18] & 0xff) : 0;
+    mode = bytes.length >= 20 ? (bytes[19] & 0xff) : 0;
+    errorState = bytes.length >= 21 ? (bytes[20] & 0xff) : 0;
+  }
 
   const hasBattery = voltageMv > 50; // NcBean treats 0 or 1 mV as empty slot
   const chargerStatusLabel = !hasBattery
@@ -2421,8 +2469,8 @@ function parseAndApplyNc3000SlotTelemetry(bytes) {
     const cmdGrace = now - (keeperState.slots[slotIdx]?.lastCmdTime || 0) < 5000;
     if (!cmdGrace) {
       // Hardware returned to Standby after native operation and grace period elapsed
-      keeperState.slots[slotIdx].phase = "IDLE";
-      keeperState.slots[slotIdx].phaseDetail = "Standby";
+      keeperState.slots[slotIdx].phase = "STANDBY";
+      keeperState.slots[slotIdx].phaseDetail = "Standby (0mA)";
 
       const siblingIdx = slotIdx % 2 === 0 ? slotIdx + 1 : slotIdx - 1;
       const siblingK = keeperState.slots[siblingIdx];
@@ -2433,6 +2481,20 @@ function parseAndApplyNc3000SlotTelemetry(bytes) {
         keeperState.pairs[pairIdx].active = false;
         keeperState.active = keeperState.pairs[0].active || keeperState.pairs[1].active;
         updateKeeperControlButtons();
+      }
+    }
+  } else if (!isHwActive) {
+    if (info.hasBattery) {
+      keeperState.slots[slotIdx].wasBatteryPresent = true;
+      if (keeperState.slots[slotIdx].phase === "IDLE" || !keeperState.slots[slotIdx].phase) {
+        keeperState.slots[slotIdx].phase = "STANDBY";
+        keeperState.slots[slotIdx].phaseDetail = "Standby (0mA)";
+      }
+    } else {
+      keeperState.slots[slotIdx].wasBatteryPresent = false;
+      if (keeperState.slots[slotIdx].phase !== "CONNECTION_BREAK") {
+        keeperState.slots[slotIdx].phase = "IDLE";
+        keeperState.slots[slotIdx].phaseDetail = "Empty Slot";
       }
     }
   }
@@ -2997,8 +3059,9 @@ function updatePairCardsUI() {
       const presentSlot = tA.hasBattery ? sA + 1 : sB + 1;
 
       if (cfg.mode !== "RACE_READY") {
-        const modeBadge = (presentT.hasBattery && WORKING_MODES[presentT.mode]?.badge) || WORKING_MODES[cfg.mode]?.badge || "RUNNING";
-        const modeName = (presentT.hasBattery && WORKING_MODES[presentT.mode]?.name) || WORKING_MODES[cfg.mode]?.name || cfg.mode;
+        const modeId = NC3000_HW_MODE_TO_ID[presentT.mode] || cfg.mode;
+        const modeBadge = (presentT.hasBattery && WORKING_MODES[modeId]?.badge) || WORKING_MODES[cfg.mode]?.badge || "RUNNING";
+        const modeName = (presentT.hasBattery && WORKING_MODES[modeId]?.name) || WORKING_MODES[cfg.mode]?.name || cfg.mode;
         const isSingleDone = presentK.phase === "DONE" || presentT.chargerStatu >= 5;
         const isSingleActive = isPairActive || presentK.phase === "NATIVE_ACTIVE" || presentT.chargerStatu >= 2 || presentT.currentMa > 20;
 
@@ -3049,7 +3112,8 @@ function updatePairCardsUI() {
     if (cfg.mode === "RACE_READY") {
       targetDeltaEl.textContent = `Target: ${(targetMv / 1000).toFixed(3)} V (${packSign}${packDiffMv} mV)`;
     } else {
-      const modeObj = (tA.hasBattery && tA.mode in WORKING_MODES) ? WORKING_MODES[tA.mode] : (WORKING_MODES[cfg.mode] || WORKING_MODES.CHARGE);
+      const modeIdA = NC3000_HW_MODE_TO_ID[tA.mode] || cfg.mode;
+      const modeObj = WORKING_MODES[modeIdA] || WORKING_MODES[cfg.mode] || WORKING_MODES.CHARGE;
       targetDeltaEl.textContent = `${modeObj.name}`;
     }
 
@@ -3111,7 +3175,8 @@ function updatePairCardsUI() {
       }
       cardEl.classList.add("balancing");
       badgeEl.className = "pair-badge balancing";
-      const modeBadge = (tA.hasBattery && WORKING_MODES[tA.mode]?.badge) || WORKING_MODES[cfg.mode]?.badge || "RUNNING";
+      const modeIdA = NC3000_HW_MODE_TO_ID[tA.mode] || cfg.mode;
+      const modeBadge = (tA.hasBattery && WORKING_MODES[modeIdA]?.badge) || WORKING_MODES[cfg.mode]?.badge || "RUNNING";
       badgeEl.textContent = cfg.mode === "RACE_READY" ? "BALANCING" : modeBadge;
     } else if (kA.phase === "SETTLING" || kB.phase === "SETTLING") {
       badgeEl.className = "pair-badge resting";
@@ -3779,7 +3844,7 @@ async function pollAllFourSlotsOnce() {
     const mask = NC3000_SLOT_MASKS[i];
     const frame = buildSkyrcFrame(new Uint8Array([0x91, mask]));
     await sendBytes(frame, `[Telemetry Poll Slot ${i + 1}]`);
-    await new Promise((r) => setTimeout(r, 140));
+    await new Promise((r) => setTimeout(r, 160));
   }
 }
 
