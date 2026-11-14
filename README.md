@@ -21,6 +21,7 @@ Live web app: [https://nc3000pro-ui.web.app](https://nc3000pro-ui.web.app)
    - [Mode 3: Cycle and refresh](#mode-3-cycle-and-refresh)
    - [Mode 4: Storage mode](#mode-4-storage-mode)
    - [Mode 5: Turbo charge](#mode-5-turbo-charge)
+   - [Battery Test (Motor Dyno)](#battery-test-motor-dyno)
 3. [Telemetry and charts](#telemetry-and-charts)
 4. [Hardware system settings](#hardware-system-settings)
 5. [BLE protocol (0x94 frame format)](#ble-protocol-0x94-frame-format)
@@ -81,9 +82,9 @@ The controller uses two paths:
 - Safety limits: Capacity limit from 100 to 50,000 mAh; timer from 0 to 1440 minutes (0 disables the timer).
 
 ### Mode 1: Discharge
-- Discharge current: 100 mA to 2000 mA.
+- Discharge current: 200 mA to 2500 mA (verified in STM32 firmware `100209_SK_V0255.bin`).
 - Cutoff voltage: 850 mV to 1400 mV (default 1000 mV / 1.00V).
-- Stop current: 0 to 2500 mA cutoff threshold (50 mA steps).
+- Stop current: 0 to 2500 mA cutoff threshold (setting Stop Current equal to Discharge Current disables Linear Current Reduce).
 - Safety timer: 0 to 1440 minutes (0 disables the timer).
 
 ### Mode 2: Break-in
@@ -102,6 +103,12 @@ The controller uses two paths:
 
 ### Mode 5: Turbo charge
 - Presets: 1500 mA, 1800 mA, 2000 mA, 2500 mA, and 3000 mA.
+
+### Battery Test (Motor Dyno)
+- **Tamiya Mini 4WD Motor Presets:** Covers all Single-Shaft (`FA-130` through `Ultra-Dash`) and Dual-Shaft PRO (`Light-Dash PRO` through `Plasma-Dash PRO`) motors from `1100 mA` to the NC3000 Pro's `2500 mA` Mode 1 hardware ceiling, plus a Custom manual current draw input (`200–2500 mA`).
+- **Constant-Current Benchmark:** Sends native Mode 1 `0x94` frames with `outStopCurrentMa = dischargeMa` (disabling firmware Linear Current Reduce), `1.00 V` hard cutoff, `300 mAh` safety ceiling, `10 min` hardware timer, and a 250 ms dyno telemetry poller boost.
+- **Metrics & Pair Matching:** Records Mean Loaded Voltage (`Score`), initial punch drop (`V0 - V(1s)`), checkpoint voltages (`V(10s)` through `V(180s)`), post-stabilization internal resistance (`IR`), IR-compensated `Est. V @ Peak` for Dash motors above 2.5 A, Cell Ranking leaderboard, and Best-Pair Recommender for 2-cell series race packs.
+- *Credits:* Loaded-discharge dyno testing workflow inspired by the benchmark concept popularized by [peaktest.app](https://peaktest.app) (clean-room implementation).
 
 ---
 

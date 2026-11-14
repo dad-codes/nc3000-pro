@@ -663,7 +663,9 @@ select {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  flex-shrink: 0;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .keeper-header {
@@ -3776,4 +3778,646 @@ body.pit-mode #btnTogglePitMode {
   min-height: 36px;
 }
 
+/* ============================================================================
+   Battery Test / Mini 4WD Motor Dyno View (Tab 3)
+   ============================================================================ */
+.battery-test-tab-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+  padding-bottom: 16px;
+}
+
+.battery-test-tab-view.hidden {
+  display: none !important;
+}
+
+.dyno-card {
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dyno-card-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.dyno-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dyno-title-wrap h3 {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text-0);
+  margin: 0;
+}
+
+.dyno-subtitle {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.dyno-safety-pill {
+  display: inline-block;
+  font-size: 10.5px;
+  color: #6ee7b7;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-radius: 4px;
+  padding: 2px 7px;
+  width: fit-content;
+}
+
+.dyno-header-actions,
+.dyno-ranking-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dyno-chk-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-1);
+  cursor: pointer;
+  user-select: none;
+}
+
+.dyno-config-grid {
+  display: grid;
+  grid-template-columns: minmax(260px, 1.5fr) 160px minmax(280px, 1.5fr) minmax(200px, 1fr);
+  gap: 10px;
+  align-items: end;
+}
+
+.dyno-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dyno-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.dyno-select,
+.dyno-input {
+  width: 100%;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  color: var(--text-0);
+  padding: 6px 9px;
+  border-radius: 5px;
+  font-size: 12px;
+  min-height: 33px;
+}
+
+.dyno-select:focus,
+.dyno-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.dyno-dur-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.dyno-dur-btn {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-1);
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+
+.dyno-dur-btn:hover {
+  border-color: var(--accent);
+  color: var(--text-0);
+}
+
+.dyno-dur-btn.active {
+  background: rgba(56, 189, 248, 0.2);
+  border-color: #38bdf8;
+  color: #38bdf8;
+}
+
+.dyno-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.dyno-banner-info {
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  color: #bae6fd;
+}
+
+.dyno-banner-warn {
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: #fde68a;
+}
+
+.dyno-banner-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.dyno-banner-text {
+  flex: 1 1 260px;
+}
+
+.dyno-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dyno-slots-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.dyno-slot-card {
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-top: 3px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.15s, opacity 0.15s;
+}
+
+.dyno-slot-card.slot-color-0 { border-top-color: #38bdf8; }
+.dyno-slot-card.slot-color-1 { border-top-color: #a78bfa; }
+.dyno-slot-card.slot-color-2 { border-top-color: #34d399; }
+.dyno-slot-card.slot-color-3 { border-top-color: #fb923c; }
+
+.dyno-slot-card.unchecked {
+  opacity: 0.55;
+}
+
+.dyno-slot-card.dyno-running {
+  box-shadow: inset 0 0 12px rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.55);
+}
+
+.dyno-slot-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.dyno-slot-chk-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 12px;
+  user-select: none;
+}
+
+.dyno-slot-chk-label input[type="checkbox"] {
+  accent-color: #10b981;
+  width: 14px;
+  height: 14px;
+}
+
+.dyno-slot-state {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-1);
+}
+
+.dyno-slot-state.discharging {
+  background: rgba(245, 158, 11, 0.2);
+  border-color: rgba(245, 158, 11, 0.65);
+  color: #fde68a;
+}
+
+.dyno-slot-state.done {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: rgba(16, 185, 129, 0.6);
+  color: #6ee7b7;
+}
+
+.dyno-slot-state.error {
+  background: rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.65);
+  color: #fca5a5;
+}
+
+.dyno-slot-live {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11.5px;
+  color: var(--text-0);
+  background: var(--bg-1);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
+.dyno-cell-name-input {
+  width: 100%;
+  background: var(--bg-1);
+  border: 1px solid var(--border);
+  color: var(--text-0);
+  padding: 4px 7px;
+  border-radius: 4px;
+  font-size: 11.5px;
+}
+
+.dyno-launch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.dyno-slot-quick-group,
+.dyno-run-btn-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dyno-power-readout {
+  font-size: 11px;
+  color: var(--text-1);
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+
+.dyno-power-readout.warn {
+  color: #fde68a;
+  border-color: rgba(245, 158, 11, 0.55);
+  background: rgba(245, 158, 11, 0.12);
+}
+
+.dyno-run-btn {
+  min-width: 165px;
+  font-weight: 700;
+}
+
+.dyno-run-btn.confirm-armed {
+  background: #d97706 !important;
+  border-color: #f59e0b !important;
+  color: #fff !important;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.45);
+}
+
+.dyno-progress-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.dyno-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #fde68a;
+}
+
+.dyno-progress-track {
+  width: 100%;
+  height: 10px;
+  background: var(--bg-2);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.dyno-progress-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #f59e0b 0%, #10b981 100%);
+  transition: width 0.25s ease;
+}
+
+.dyno-warnings-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dyno-warn-badge {
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.16);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: #fde68a;
+}
+
+.dyno-warn-badge.danger {
+  background: rgba(239, 68, 68, 0.16);
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+}
+
+.dyno-warn-badge.info {
+  background: rgba(56, 189, 248, 0.14);
+  border-color: rgba(56, 189, 248, 0.4);
+  color: #7dd3fc;
+}
+
+.dyno-svg-chart-container {
+  width: 100%;
+  min-height: 220px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+}
+
+.dyno-svg-chart {
+  width: 100%;
+  height: 260px;
+  display: block;
+}
+
+.dyno-svg-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 6px 4px 2px 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+
+.dyno-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-0);
+}
+
+.dyno-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+
+.dyno-empty-state,
+.dyno-table-empty {
+  color: var(--text-2);
+  text-align: center;
+  padding: 18px 10px;
+  font-size: 12px;
+}
+
+.dyno-two-cell-delta-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: #d1fae5;
+}
+
+.dyno-table-scroll {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.dyno-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+  text-align: left;
+}
+
+.dyno-table th {
+  background: var(--bg-2);
+  color: var(--text-1);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.dyno-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid rgba(42, 53, 75, 0.55);
+  white-space: nowrap;
+}
+
+.dyno-table tbody tr:hover {
+  background: rgba(59, 130, 246, 0.06);
+}
+
+.dyno-score-hero {
+  font-weight: 700;
+  color: #34d399;
+  font-size: 12.5px;
+}
+
+.dyno-cell-tag {
+  display: inline-block;
+  font-size: 9.5px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 4px;
+  font-family: var(--font-mono);
+}
+
+.dyno-cell-tag.trickle {
+  background: rgba(56, 189, 248, 0.18);
+  color: #7dd3fc;
+}
+
+.dyno-cell-tag.warn {
+  background: rgba(245, 158, 11, 0.2);
+  color: #fde68a;
+}
+
+.dyno-cell-tag.danger {
+  background: rgba(239, 68, 68, 0.2);
+  color: #fca5a5;
+}
+
+.dyno-filter-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dyno-filter-pill {
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  color: var(--text-1);
+  padding: 4px 10px;
+  border-radius: 5px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  cursor: pointer;
+}
+
+.dyno-filter-pill.active {
+  background: rgba(56, 189, 248, 0.16);
+  border-color: #38bdf8;
+  color: #38bdf8;
+  font-weight: 700;
+}
+
+.dyno-pair-recommender {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.dyno-pair-rec-card {
+  background: var(--bg-0);
+  border: 1px solid rgba(16, 185, 129, 0.45);
+  border-radius: 6px;
+  padding: 9px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dyno-pair-rec-card.rank-1 {
+  border-color: rgba(250, 204, 21, 0.65);
+  background: linear-gradient(180deg, rgba(250, 204, 21, 0.07) 0%, var(--bg-0) 100%);
+}
+
+.dyno-pair-rec-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.dyno-pair-rec-meta {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-1);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.dyno-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.dyno-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: border-color 0.14s, background 0.14s;
+}
+
+.dyno-history-item:hover {
+  border-color: var(--accent);
+}
+
+.dyno-history-item.active {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.dyno-history-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dyno-history-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-0);
+}
+
+.dyno-history-sub {
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+@media (max-width: 1100px) {
+  .dyno-config-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .dyno-slots-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .dyno-config-grid,
+  .dyno-slots-grid {
+    grid-template-columns: 1fr;
+  }
+}
 

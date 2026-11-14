@@ -88,6 +88,11 @@
         <span>Telemetry Analytics</span>
         <span class="tab-pulse-dot" id="analyticsPulseDot" title="Receiving live telemetry"></span>
       </button>
+      <button type="button" class="tab-nav-btn" id="tabBtnBatteryTest" data-tab="battery-test">
+        <span class="tab-icon">🏁</span>
+        <span>Battery Test (Motor Dyno)</span>
+        <span class="tab-pulse-dot hidden" id="dynoPulseDot" title="Motor Dyno test running"></span>
+      </button>
     </nav>
 
     <div class="keeper-body" id="keeperBody">
@@ -579,6 +584,300 @@
         </div>
         <div class="chart-canvas-wrapper" id="chartCanvasWrapper">
           <canvas id="telemetryChartCanvas"></canvas>
+        </div>
+      </div>
+    </section>
+
+    <!-- Battery Test / Mini 4WD Motor Dyno View (Tab 3) -->
+    <section class="battery-test-tab-view hidden" id="batteryTestTabView">
+      <!-- A. Dyno Control & Motor Preset Card -->
+      <div class="dyno-card dyno-control-card">
+        <div class="dyno-card-header">
+          <div class="dyno-title-wrap">
+            <h3>🏁 Mini 4WD Motor Dyno — Constant-Current Loaded Discharge Benchmark</h3>
+            <span class="dyno-safety-pill mono" title="Mode 1 Discharge hardware safety limits (outStopCurrentMa = dischargeMa disables firmware linear current taper)">
+              Mode 1 • Cutoff: 1.00V • Cap: 300mAh • Timer: 10m • Linear Taper: OFF
+            </span>
+          </div>
+          <div class="dyno-header-actions">
+            <button type="button" id="btnDynoExportCsv" class="btn small secondary" title="Export active dyno run curves and metrics as CSV">📄 Export CSV</button>
+            <button type="button" id="btnDynoExportJson" class="btn small secondary" title="Export all saved dyno runs as JSON">📦 Export JSON</button>
+            <button type="button" id="btnDynoImportJson" class="btn small" title="Import saved dyno runs from JSON">📥 Import JSON</button>
+            <input type="file" id="dynoImportFileInput" accept=".json,application/json" class="hidden" />
+          </div>
+        </div>
+
+        <!-- Configuration Grid -->
+        <div class="dyno-config-grid">
+          <label class="dyno-field dyno-field-wide">
+            <span class="dyno-field-label">Tamiya Motor Preset (Single-Shaft &amp; Dual-Shaft PRO)</span>
+            <select id="dynoMotorPreset" class="dyno-select">
+              <optgroup label="Single-Shaft Motors (Standard Chassis)">
+                <option value="fa-130">FA-130 (Kit Standard) — ~1.1 A (1100 mA)</option>
+                <option value="light-dash">Light-Dash — 1.5–2.2 A (1800 mA)</option>
+                <option value="torque-tuned-2">Torque-Tuned 2 — 1.7–2.0 A (1800 mA)</option>
+                <option value="rev-tuned-2">Rev-Tuned 2 — 1.7–2.2 A (1900 mA)</option>
+                <option value="atomic-tuned-2">Atomic-Tuned 2 — 1.8–2.2 A (2000 mA)</option>
+                <option value="hyper-dash-3">Hyper-Dash 3 — 1.6–3.0 A (2300 mA • 3.0A Peak)</option>
+                <option value="power-dash">Power-Dash — 2.0–3.2 A (2500 mA • 2.5A Cap)</option>
+                <option value="sprint-dash">Sprint-Dash — 2.0–3.5 A (2500 mA • 2.5A Cap)</option>
+                <option value="ultra-dash">Ultra-Dash (Non-Official) — 2.8–3.5+ A (2500 mA • 2.5A Cap)</option>
+              </optgroup>
+              <optgroup label="Dual-Shaft PRO Motors (MS / MA Chassis)">
+                <option value="light-dash-pro">Light-Dash PRO — 1.5–2.2 A (1800 mA)</option>
+                <option value="torque-tuned-2-pro">Torque-Tuned 2 PRO — 1.7–2.0 A (1800 mA)</option>
+                <option value="rev-tuned-2-pro">Rev-Tuned 2 PRO — 1.7–2.2 A (1900 mA)</option>
+                <option value="atomic-tuned-2-pro">Atomic-Tuned 2 PRO — 1.8–2.2 A (2000 mA)</option>
+                <option value="hyper-dash-pro">Hyper-Dash PRO — 1.6–3.0 A (2300 mA • 3.0A Peak)</option>
+                <option value="mach-dash-pro" selected>Mach-Dash PRO — 2.0–3.5 A (2500 mA • 2.5A Cap)</option>
+                <option value="plasma-dash-pro">Plasma-Dash PRO (Non-Official) — High Draw (2500 mA • 2.5A Cap)</option>
+              </optgroup>
+              <optgroup label="Custom Load">
+                <option value="custom">Custom (Manual Current Draw)</option>
+              </optgroup>
+            </select>
+          </label>
+
+          <label class="dyno-field">
+            <span class="dyno-field-label">Test Current (mA) <code class="mono">200–2500</code></span>
+            <input type="number" id="dynoCurrentMa" class="dyno-input mono" min="200" max="2500" step="100" value="2500" />
+          </label>
+
+          <div class="dyno-field">
+            <span class="dyno-field-label">Test Duration (seconds)</span>
+            <div class="dyno-dur-pills" id="dynoDurationPills">
+              <button type="button" class="dyno-dur-btn" data-dyno-dur="10">10s</button>
+              <button type="button" class="dyno-dur-btn" data-dyno-dur="20">20s</button>
+              <button type="button" class="dyno-dur-btn" data-dyno-dur="30">30s</button>
+              <button type="button" class="dyno-dur-btn active" data-dyno-dur="45">45s</button>
+              <button type="button" class="dyno-dur-btn" data-dyno-dur="60">60s</button>
+              <button type="button" class="dyno-dur-btn" data-dyno-dur="90">90s</button>
+              <button type="button" class="dyno-dur-btn" data-dyno-dur="120">120s</button>
+              <button type="button" class="dyno-dur-btn" data-dyno-dur="180">180s</button>
+            </div>
+          </div>
+
+          <label class="dyno-field dyno-field-note">
+            <span class="dyno-field-label">Pit / Ambient Note (Optional)</span>
+            <input type="text" id="dynoRunNote" class="dyno-input" maxlength="80" placeholder="e.g. NeoChamp Batch A • 25°C Pit" />
+          </label>
+        </div>
+
+        <!-- Hardware Cap Banner (Clamped Dash Motors) -->
+        <div class="dyno-banner dyno-banner-info hidden" id="dynoClampedBanner">
+          <span class="dyno-banner-icon">ℹ️</span>
+          <div class="dyno-banner-text" id="dynoClampedText">
+            Selected motor draws up to 3.5 A peak, exceeding the NC3000 Pro's 2500 mA Mode 1 hardware ceiling. Results will also project <strong>Est. V @ Rated Peak</strong> using each cell's measured IR.
+          </div>
+        </div>
+
+        <!-- 15W Total Discharge Power Budget Warning Banner -->
+        <div class="dyno-banner dyno-banner-warn hidden" id="dynoPowerBudgetBanner">
+          <span class="dyno-banner-icon">⚠️</span>
+          <div class="dyno-banner-text" id="dynoPowerBudgetText">
+            Estimated total load approaches the NC3000 Pro's 15 W total discharge ceiling, which can throttle multi-slot runs. Test 2 slots at a time for full 2500 mA accuracy:
+          </div>
+          <div class="dyno-banner-actions">
+            <button type="button" id="btnDynoQuickPair1" class="btn small">Select Pair 1 (Slots 1 &amp; 2)</button>
+            <button type="button" id="btnDynoQuickPair2" class="btn small">Select Pair 2 (Slots 3 &amp; 4)</button>
+          </div>
+        </div>
+
+        <!-- 4-Slot Selection & Cell Naming Grid -->
+        <div class="dyno-slots-grid" id="dynoSlotsGrid">
+          <div class="dyno-slot-card slot-color-0" data-dyno-slot="0" id="dynoSlotCard-0">
+            <div class="dyno-slot-top">
+              <label class="dyno-slot-chk-label">
+                <input type="checkbox" class="dyno-slot-chk" id="dynoSlotChk-0" data-dyno-slot="0" checked />
+                <span class="dyno-slot-title">SLOT 1</span>
+              </label>
+              <span class="dyno-slot-state mono" id="dynoSlotState-0">Standby</span>
+            </div>
+            <div class="dyno-slot-live mono">
+              <span id="dynoSlotLiveV-0">—.——— V</span>
+              <span id="dynoSlotLiveI-0">0 mA</span>
+              <span id="dynoSlotLiveIr-0">— mΩ</span>
+            </div>
+            <input type="text" class="dyno-cell-name-input" id="dynoCellName-0" data-dyno-slot="0" maxlength="24" placeholder="Cell name (e.g. A1)" />
+          </div>
+
+          <div class="dyno-slot-card slot-color-1" data-dyno-slot="1" id="dynoSlotCard-1">
+            <div class="dyno-slot-top">
+              <label class="dyno-slot-chk-label">
+                <input type="checkbox" class="dyno-slot-chk" id="dynoSlotChk-1" data-dyno-slot="1" checked />
+                <span class="dyno-slot-title">SLOT 2</span>
+              </label>
+              <span class="dyno-slot-state mono" id="dynoSlotState-1">Standby</span>
+            </div>
+            <div class="dyno-slot-live mono">
+              <span id="dynoSlotLiveV-1">—.——— V</span>
+              <span id="dynoSlotLiveI-1">0 mA</span>
+              <span id="dynoSlotLiveIr-1">— mΩ</span>
+            </div>
+            <input type="text" class="dyno-cell-name-input" id="dynoCellName-1" data-dyno-slot="1" maxlength="24" placeholder="Cell name (e.g. A2)" />
+          </div>
+
+          <div class="dyno-slot-card slot-color-2" data-dyno-slot="2" id="dynoSlotCard-2">
+            <div class="dyno-slot-top">
+              <label class="dyno-slot-chk-label">
+                <input type="checkbox" class="dyno-slot-chk" id="dynoSlotChk-2" data-dyno-slot="2" />
+                <span class="dyno-slot-title">SLOT 3</span>
+              </label>
+              <span class="dyno-slot-state mono" id="dynoSlotState-2">Standby</span>
+            </div>
+            <div class="dyno-slot-live mono">
+              <span id="dynoSlotLiveV-2">—.——— V</span>
+              <span id="dynoSlotLiveI-2">0 mA</span>
+              <span id="dynoSlotLiveIr-2">— mΩ</span>
+            </div>
+            <input type="text" class="dyno-cell-name-input" id="dynoCellName-2" data-dyno-slot="2" maxlength="24" placeholder="Cell name (e.g. B1)" />
+          </div>
+
+          <div class="dyno-slot-card slot-color-3" data-dyno-slot="3" id="dynoSlotCard-3">
+            <div class="dyno-slot-top">
+              <label class="dyno-slot-chk-label">
+                <input type="checkbox" class="dyno-slot-chk" id="dynoSlotChk-3" data-dyno-slot="3" />
+                <span class="dyno-slot-title">SLOT 4</span>
+              </label>
+              <span class="dyno-slot-state mono" id="dynoSlotState-3">Standby</span>
+            </div>
+            <div class="dyno-slot-live mono">
+              <span id="dynoSlotLiveV-3">—.——— V</span>
+              <span id="dynoSlotLiveI-3">0 mA</span>
+              <span id="dynoSlotLiveIr-3">— mΩ</span>
+            </div>
+            <input type="text" class="dyno-cell-name-input" id="dynoCellName-3" data-dyno-slot="3" maxlength="24" placeholder="Cell name (e.g. B2)" />
+          </div>
+        </div>
+
+        <!-- Launch Bar & Live Progress -->
+        <div class="dyno-launch-row">
+          <div class="dyno-slot-quick-group">
+            <button type="button" id="btnDynoSelectPair1" class="btn small slot-filter-btn">Pair 1 (1&amp;2)</button>
+            <button type="button" id="btnDynoSelectPair2" class="btn small slot-filter-btn">Pair 2 (3&amp;4)</button>
+            <button type="button" id="btnDynoSelectAll" class="btn small slot-filter-btn">All 4 Slots</button>
+            <span class="dyno-power-readout mono" id="dynoEstPowerReadout">Est. Load: ~6.3 W (Safe)</span>
+          </div>
+          <div class="dyno-run-btn-group">
+            <button type="button" id="btnDynoRun" class="btn primary dyno-run-btn" disabled>▶ Run Dyno Test</button>
+            <button type="button" id="btnDynoStop" class="btn danger dyno-stop-btn hidden">■ Abort Dyno Test</button>
+          </div>
+        </div>
+
+        <div class="dyno-progress-wrap hidden" id="dynoProgressWrap">
+          <div class="dyno-progress-meta mono">
+            <span id="dynoProgressText">Starting Mode 1 Discharge…</span>
+            <span id="dynoElapsedTimer">0.0s / 45s</span>
+          </div>
+          <div class="dyno-progress-track">
+            <div class="dyno-progress-bar" id="dynoProgressBar" style="width: 0%;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- B. Live & Historical Discharge Curve Card -->
+      <div class="dyno-card dyno-chart-card">
+        <div class="dyno-card-header">
+          <div class="dyno-title-wrap">
+            <h3 id="dynoChartTitle">Loaded Voltage Discharge Curve</h3>
+            <span class="dyno-subtitle mono" id="dynoChartSubtitle">Run a test or select a saved run below to inspect voltage-under-load curves and sag checkpoints.</span>
+          </div>
+          <div class="dyno-warnings-wrap" id="dynoRunWarnings"></div>
+        </div>
+        <div class="dyno-svg-chart-container" id="dynoSvgChartContainer">
+          <div class="dyno-empty-state">No dyno test active or loaded yet. Connect your NC3000 Pro, pick a Tamiya motor preset, and click <strong>Run Dyno Test</strong>.</div>
+        </div>
+      </div>
+
+      <!-- C. Active Run Results & Checkpoint Sag Breakdown -->
+      <div class="dyno-card dyno-results-card" id="dynoResultsCard">
+        <div class="dyno-card-header">
+          <div class="dyno-title-wrap">
+            <h3>Run Results &amp; Checkpoint Sag Breakdown</h3>
+            <span class="dyno-subtitle mono" id="dynoResultsMeta">—</span>
+          </div>
+        </div>
+        <div class="dyno-two-cell-delta-bar hidden" id="dynoTwoCellDeltaBar"></div>
+        <div class="dyno-table-scroll">
+          <table class="dyno-table" id="dynoResultsTable">
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>Cell / Slot</th>
+                <th>Score (Avg V)</th>
+                <th id="thEstPeakV" class="hidden">Est. V @ Peak</th>
+                <th>V0 (Rest)</th>
+                <th>Punch (1s)</th>
+                <th>V(10s)</th>
+                <th id="thVend">V(45s)</th>
+                <th>10s → End</th>
+                <th>V_min</th>
+                <th>Avg Cur</th>
+                <th>IR (mΩ)</th>
+              </tr>
+            </thead>
+            <tbody id="dynoResultsTbody">
+              <tr><td colspan="12" class="dyno-table-empty">No run results loaded.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- D. Best-Pair Recommender & Cell Ranking Leaderboard -->
+      <div class="dyno-card dyno-ranking-card">
+        <div class="dyno-card-header">
+          <div class="dyno-title-wrap">
+            <h3>🏆 Cell Ranking Leaderboard &amp; Best-Pair Recommender</h3>
+            <span class="dyno-subtitle">Partitioned by identical (Duration × Test Current) using the latest run per unique named cell.</span>
+          </div>
+          <div class="dyno-ranking-controls">
+            <label class="dyno-chk-inline">
+              <input type="checkbox" id="dynoIncludeUnnamedChk" />
+              <span>Include unnamed "Slot N" runs</span>
+            </label>
+            <button type="button" id="btnDynoClearHistory" class="btn small danger">🗑️ Clear All Saved Runs</button>
+          </div>
+        </div>
+
+        <div class="dyno-filter-pills" id="dynoRankingFilterPills"></div>
+
+        <!-- Best-Pair Recommender -->
+        <div class="dyno-pair-recommender hidden" id="dynoPairRecommenderPanel"></div>
+
+        <!-- Leaderboard Table -->
+        <div class="dyno-table-scroll">
+          <table class="dyno-table" id="dynoCellRankingTable">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Cell</th>
+                <th>Motor Preset</th>
+                <th>Score (Avg V)</th>
+                <th>Δ Leader</th>
+                <th>Punch (1s)</th>
+                <th>10s → End</th>
+                <th>V(end)</th>
+                <th>IR (mΩ)</th>
+                <th>Tested</th>
+              </tr>
+            </thead>
+            <tbody id="dynoRankingTbody">
+              <tr><td colspan="10" class="dyno-table-empty">No ranked cells for this filter yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- E. Saved Dyno Runs History -->
+      <div class="dyno-card dyno-history-card">
+        <div class="dyno-card-header">
+          <div class="dyno-title-wrap">
+            <h3>📜 Saved Dyno Test Runs</h3>
+            <span class="dyno-subtitle mono" id="dynoHistoryCount">0 saved runs</span>
+          </div>
+        </div>
+        <div class="dyno-history-list" id="dynoHistoryList">
+          <div class="dyno-empty-state">No saved dyno runs yet.</div>
         </div>
       </div>
     </section>

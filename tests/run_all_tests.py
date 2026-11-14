@@ -43,7 +43,8 @@ def main():
     test_scripts = [
         "test_mode_settings_and_overlay.py",
         "test_telemetry_and_hw_settings.py",
-        "test_slot_mode_configuration.py"
+        "test_slot_mode_configuration.py",
+        "test_battery_dyno.py"
     ]
 
     all_passed = True

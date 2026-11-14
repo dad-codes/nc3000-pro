@@ -480,6 +480,9 @@ async function connectBle() {
 function onDisconnected() {
   stopOpcodeScan();
   stopTelemetryPoller();
+  if (typeof isDynoSessionActive === "function" && isDynoSessionActive()) {
+    abortDynoOnDisconnect("BLE disconnected during Motor Dyno test");
+  }
   if (keeperState.active) {
     stopAutoKeeper(false);
   }
@@ -2265,6 +2268,7 @@ const keeperState = {
   ],
   pollTimer: null,
   pollCursor: 0,
+  pollIntervalMs: 420,
   slots: [0, 1, 2, 3].map((slotIdx) => ({
     slotIdx,
     phase: "IDLE", // IDLE | EVAL_OCV | CHARGING | DISCHARGING | SETTLING | HOLDING_READY | STALLED | NO_BATTERY
@@ -2285,7 +2289,8 @@ const keeperState = {
     outOfBandPolls: 0,
     thermalFaultCount: 0,
     isStalled: false,
-    stallReason: ""
+    stallReason: "",
+    lastSyncedHwSig: null
   }))
 };
 
@@ -2376,6 +2381,10 @@ function parseAndApplyNc3000SlotTelemetry(bytes) {
   };
 
   slotTelemetry[slotIdx] = info;
+  const wasDynoBeforePacket = typeof isDynoSessionActive === "function" && isDynoSessionActive();
+  if (typeof ingestDynoSlotTelemetry === "function") {
+    ingestDynoSlotTelemetry(info);
+  }
 
   // Telemetry buffer ingestion & automatic reset on cell insertion
   if (typeof telemetryHistory !== "undefined") {
@@ -2435,12 +2444,16 @@ function parseAndApplyNc3000SlotTelemetry(bytes) {
   const detectedModeId = NC3000_HW_MODE_TO_ID[info.mode] || "CHARGE";
   const isHwRunning = info.hasBattery && (info.chargerStatu >= 2 || info.currentMa > 15);
   const isHwReady = info.hasBattery && info.chargerStatu === 1;
-  const isHwConfigured = info.hasBattery && info.mode > 0;
-  const isHwActive = isHwRunning || isHwReady || (isHwConfigured && !keeperState.active);
+  const isHwActive = isHwRunning || isHwReady;
+  const hwSig = isHwActive ? `${info.mode}:${info.chargerStatu}` : null;
+  const hwSigChanged = hwSig !== keeperState.slots[slotIdx].lastSyncedHwSig;
 
-  if (isHwActive && !isRaceReadySession && !isUserStopCoolingDown) {
-    // If webapp is idle or in a different mode, adopt the hardware mode
-    if (!keeperState.active || (cfg.mode !== detectedModeId && !isPairActive)) {
+  const isDynoRunningNow = wasDynoBeforePacket
+    || (typeof isDynoSessionActive === "function" && isDynoSessionActive())
+    || (typeof dynoState !== "undefined" && Date.now() < (dynoState.cooldownUntil || 0));
+  if (isHwActive && !isRaceReadySession && !isUserStopCoolingDown && !isDynoRunningNow) {
+    // Only auto-switch UI working mode when this hardware slot transitions into a new active/ready signature
+    if (hwSigChanged && (!keeperState.active || (cfg.mode !== detectedModeId && !isPairActive))) {
       switchWorkingMode(detectedModeId, false);
       appendLog(
         "SYS",
@@ -2448,7 +2461,7 @@ function parseAndApplyNc3000SlotTelemetry(bytes) {
         null,
         `[Hardware Sync] Detected active hardware session on Slot ${slotIdx + 1} (Pair ${pairIdx + 1}): Mode ${info.modeLabel} (${info.chargerStatusLabel}). Web UI synchronized to ${detectedModeId}.`
       );
-    } else if (!isPairActive && isHwRunning) {
+    } else if (hwSigChanged && !isPairActive && isHwRunning) {
       appendLog(
         "SYS",
         null,
@@ -2456,6 +2469,7 @@ function parseAndApplyNc3000SlotTelemetry(bytes) {
         `[Hardware Sync] Attached to active hardware session on Slot ${slotIdx + 1} (Pair ${pairIdx + 1}): Mode ${info.modeLabel} (${info.chargerStatusLabel}).`
       );
     }
+    keeperState.slots[slotIdx].lastSyncedHwSig = hwSig;
 
     // Activate pair monitoring if hardware is actively running (charging/discharging/resting/done)
     if (isHwRunning) {
@@ -2479,7 +2493,10 @@ function parseAndApplyNc3000SlotTelemetry(bytes) {
 
     keeperState.slots[slotIdx].wasBatteryPresent = true;
     updateKeeperControlButtons();
+  } else if (isHwActive && (isDynoRunningNow || isUserStopCoolingDown)) {
+    keeperState.slots[slotIdx].lastSyncedHwSig = hwSig;
   } else if (!isHwActive && keeperState.slots[slotIdx]?.phase === "NATIVE_ACTIVE" && info.chargerStatu === 0 && info.currentMa <= 10) {
+    keeperState.slots[slotIdx].lastSyncedHwSig = null;
     const now = Date.now();
     const cmdGrace = now - (keeperState.slots[slotIdx]?.lastCmdTime || 0) < 5000;
     if (!cmdGrace) {
@@ -2499,6 +2516,7 @@ function parseAndApplyNc3000SlotTelemetry(bytes) {
       }
     }
   } else if (!isHwActive) {
+    keeperState.slots[slotIdx].lastSyncedHwSig = null;
     if (info.hasBattery) {
       keeperState.slots[slotIdx].wasBatteryPresent = true;
       if (keeperState.slots[slotIdx].phase === "IDLE" || !keeperState.slots[slotIdx].phase) {
@@ -2517,9 +2535,9 @@ function parseAndApplyNc3000SlotTelemetry(bytes) {
   updateSlotCardUI(slotIdx);
   updatePairCardsUI();
 
-  // Closed-loop autonomous keeper steps ONLY for active pairs
+  // Closed-loop autonomous keeper steps ONLY for active pairs (and never during an active Motor Dyno run)
   // When idle, cell presence and telemetry are monitored safely without charging/discharging
-  if (keeperState.active && keeperState.pairs[pairIdx]?.active) {
+  if (keeperState.active && keeperState.pairs[pairIdx]?.active && !isDynoRunningNow) {
     stepSlotKeeper(slotIdx).catch((err) => {
       appendLog("ERR", null, null, `Keeper Slot ${slotIdx + 1} error: ${err.message}`);
     });
@@ -3865,6 +3883,7 @@ async function pollAllFourSlotsOnce() {
 
 function startTelemetryPoller() {
   if (keeperState.pollTimer) return;
+  const intervalMs = keeperState.pollIntervalMs || 420;
   keeperState.pollTimer = setInterval(async () => {
     if (!gattServer || !gattServer.connected || scanState.running) return;
 
@@ -3873,7 +3892,17 @@ function startTelemetryPoller() {
     const mask = NC3000_SLOT_MASKS[slotIdx];
     const frame = buildSkyrcFrame(new Uint8Array([0x91, mask]));
     await sendBytes(frame, `[Poll Slot ${slotIdx + 1}]`);
-  }, 420); // Polls 1 slot every 420ms -> full 4-slot sweep every ~1.68s
+  }, intervalMs); // Normal: 420ms (~1.68s sweep); Dyno active: 250ms (~1.0s sweep)
+}
+
+function setTelemetryPollerRate(intervalMs) {
+  const nextMs = Math.max(200, intervalMs || 420);
+  if (keeperState.pollIntervalMs === nextMs) return;
+  keeperState.pollIntervalMs = nextMs;
+  if (keeperState.pollTimer) {
+    stopTelemetryPoller();
+    startTelemetryPoller();
+  }
 }
 
 function stopTelemetryPoller() {
@@ -3893,7 +3922,8 @@ function updateKeeperControlButtons() {
   const isConnected = !!(gattServer && gattServer.connected) || document.body.classList.contains("ble-connected") || (statusIndicator && statusIndicator.classList.contains("connected"));
   const p0Active = !!keeperState.pairs?.[0]?.active;
   const p1Active = !!keeperState.pairs?.[1]?.active;
-  const anyActive = p0Active || p1Active;
+  const dynoRunning = typeof isDynoSessionActive === "function" && isDynoSessionActive();
+  const anyActive = p0Active || p1Active || dynoRunning;
   const cfg = getKeeperConfig();
 
   const enabledSlotIndices = [];
@@ -3915,7 +3945,7 @@ function updateKeeperControlButtons() {
       btnStartKeeper.style.display = "none";
       btnStopKeeper.style.display = "";
       btnStopKeeper.disabled = !isConnected;
-      btnStopKeeper.textContent = "■ Stop Running Slots";
+      btnStopKeeper.textContent = dynoRunning ? "■ Stop Motor Dyno" : "■ Stop Running Slots";
     } else {
       btnStartKeeper.style.display = "";
       btnStartKeeper.disabled = !isConnected || enabledCount === 0;
@@ -3940,7 +3970,7 @@ function updateKeeperControlButtons() {
       btnStopP0.disabled = !isConnected;
     } else {
       btnStartP0.style.display = "";
-      btnStartP0.disabled = !isConnected || p0Count === 0;
+      btnStartP0.disabled = !isConnected || p0Count === 0 || dynoRunning;
       btnStopP0.style.display = "none";
 
       if (p0Count === 2) {
@@ -3963,7 +3993,7 @@ function updateKeeperControlButtons() {
       btnStopP1.disabled = !isConnected;
     } else {
       btnStartP1.style.display = "";
-      btnStartP1.disabled = !isConnected || p1Count === 0;
+      btnStartP1.disabled = !isConnected || p1Count === 0 || dynoRunning;
       btnStopP1.style.display = "none";
 
       if (p1Count === 2) {
@@ -3977,6 +4007,9 @@ function updateKeeperControlButtons() {
     }
   }
 
+  if (typeof updateDynoControlButtons === "function") {
+    updateDynoControlButtons();
+  }
   updateKeeperHeaderPill();
 }
 
@@ -3988,6 +4021,7 @@ function updateKeeperHeaderPill() {
   const p0Active = !!keeperState.pairs?.[0]?.active;
   const p1Active = !!keeperState.pairs?.[1]?.active;
   const bothActive = p0Active && p1Active;
+  const dynoRunning = typeof isDynoSessionActive === "function" && isDynoSessionActive();
   const cfg = getKeeperConfig();
   const modeObj = WORKING_MODES[cfg.mode] || WORKING_MODES.RACE_READY;
 
@@ -3996,6 +4030,10 @@ function updateKeeperHeaderPill() {
       pill.className = "status-pill disconnected";
       txt.textContent = "NC3000 Pro Disconnected";
       if (icon) icon.innerHTML = KEEPER_STATUS_ICONS.disconnected;
+    } else if (dynoRunning) {
+      pill.className = "status-pill connected is-running";
+      txt.textContent = "Motor Dyno Active (Discharging…)";
+      if (icon) icon.innerHTML = KEEPER_STATUS_ICONS.active;
     } else if (bothActive) {
       pill.className = "status-pill connected is-running";
       txt.textContent = `${modeObj.name} (Pairs 1 & 2 Active)`;
@@ -4019,6 +4057,10 @@ function updateKeeperHeaderPill() {
 }
 
 async function startPairKeeper(pairIdx) {
+  if (typeof isDynoSessionActive === "function" && isDynoSessionActive()) {
+    showToast("Motor Dyno test is currently running. Stop it before starting Keeper.", "warning");
+    return;
+  }
   if (!gattServer || !gattServer.connected) {
     showToast("Please connect to your SkyRC NC3000 Pro first.", "warning");
     return;
@@ -4139,6 +4181,10 @@ async function stopPairKeeper(pairIdx, stopHardwareSlots = true) {
 }
 
 async function startAutoKeeper() {
+  if (typeof isDynoSessionActive === "function" && isDynoSessionActive()) {
+    showToast("Motor Dyno test is currently running. Stop it before starting Keeper.", "warning");
+    return;
+  }
   if (!gattServer || !gattServer.connected) {
     showToast("Please connect to your SkyRC NC3000 Pro first.", "warning");
     return;
@@ -4272,7 +4318,13 @@ async function stopAutoKeeper(stopHardwareSlots = true) {
 // Bind Keeper UI Events
 document.getElementById("btnPollOnce")?.addEventListener("click", pollAllFourSlotsOnce);
 document.getElementById("btnStartKeeper").addEventListener("click", startAutoKeeper);
-document.getElementById("btnStopKeeper").addEventListener("click", () => stopAutoKeeper(true));
+document.getElementById("btnStopKeeper").addEventListener("click", () => {
+  if (typeof isDynoSessionActive === "function" && isDynoSessionActive()) {
+    stopDynoTest("Stopped from header button");
+  } else {
+    stopAutoKeeper(true);
+  }
+});
 document.getElementById("btnStartPair-0")?.addEventListener("click", () => startPairKeeper(0));
 document.getElementById("btnStopPair-0")?.addEventListener("click", () => stopPairKeeper(0, true));
 document.getElementById("btnStartPair-1")?.addEventListener("click", () => startPairKeeper(1));
@@ -5095,18 +5147,28 @@ function switchAppTab(tabId) {
 
   const keeperBody = document.getElementById("keeperBody");
   const analyticsTabView = document.getElementById("analyticsTabView");
+  const batteryTestTabView = document.getElementById("batteryTestTabView");
 
   if (tabId === "dashboard") {
     if (keeperBody) keeperBody.style.display = "";
     if (analyticsTabView) analyticsTabView.classList.add("hidden");
+    if (batteryTestTabView) batteryTestTabView.classList.add("hidden");
   } else if (tabId === "analytics") {
     if (keeperBody) keeperBody.style.display = "none";
     if (analyticsTabView) analyticsTabView.classList.remove("hidden");
+    if (batteryTestTabView) batteryTestTabView.classList.add("hidden");
     if (telemetryChart) {
       setTimeout(() => {
         telemetryChart.resize();
         updateTelemetryChart(true);
       }, 50);
+    }
+  } else if (tabId === "battery-test") {
+    if (keeperBody) keeperBody.style.display = "none";
+    if (analyticsTabView) analyticsTabView.classList.add("hidden");
+    if (batteryTestTabView) batteryTestTabView.classList.remove("hidden");
+    if (typeof renderDynoAll === "function") {
+      renderDynoAll();
     }
   }
 }
@@ -5405,6 +5467,1449 @@ async function changeHwPin() {
   }
 }
 
+/* ==========================================================================
+   BATTERY TEST / MINI 4WD MOTOR DYNO MODULE (Mode 1 Constant-Current Benchmark)
+   ========================================================================== */
+
+const MIN_DYNO_CURRENT_MA = 200;
+const MAX_DYNO_CURRENT_MA = 2500;
+const DYNO_STORAGE_KEY = "nc3000_battery_tests_v1";
+const DYNO_PREFS_KEY = "nc3000_dyno_prefs_v1";
+const DYNO_CHECKPOINTS = [10, 20, 30, 40, 45, 60, 90, 120, 180];
+const DYNO_SLOT_COLORS = ["#38bdf8", "#a78bfa", "#34d399", "#fb923c"];
+
+const TAMIYA_MOTOR_PRESETS = [
+  // Single-Shaft Motors (Standard Chassis)
+  { id: "fa-130", label: "FA-130 (Kit Standard) — ~1.1 A", group: "Single-Shaft Motors (Standard Chassis)", defaultMa: 1100, ratedMinMa: 1000, ratedMaxMa: 1200 },
+  { id: "light-dash", label: "Light-Dash — 1.5–2.2 A", group: "Single-Shaft Motors (Standard Chassis)", defaultMa: 1800, ratedMinMa: 1500, ratedMaxMa: 2200 },
+  { id: "torque-tuned-2", label: "Torque-Tuned 2 — 1.7–2.0 A", group: "Single-Shaft Motors (Standard Chassis)", defaultMa: 1800, ratedMinMa: 1700, ratedMaxMa: 2000 },
+  { id: "rev-tuned-2", label: "Rev-Tuned 2 — 1.7–2.2 A", group: "Single-Shaft Motors (Standard Chassis)", defaultMa: 1900, ratedMinMa: 1700, ratedMaxMa: 2200 },
+  { id: "atomic-tuned-2", label: "Atomic-Tuned 2 — 1.8–2.2 A", group: "Single-Shaft Motors (Standard Chassis)", defaultMa: 2000, ratedMinMa: 1800, ratedMaxMa: 2200 },
+  { id: "hyper-dash-3", label: "Hyper-Dash 3 — 1.6–3.0 A", group: "Single-Shaft Motors (Standard Chassis)", defaultMa: 2300, ratedMinMa: 1600, ratedMaxMa: 3000 },
+  { id: "power-dash", label: "Power-Dash — 2.0–3.2 A", group: "Single-Shaft Motors (Standard Chassis)", defaultMa: 2500, ratedMinMa: 2000, ratedMaxMa: 3200 },
+  { id: "sprint-dash", label: "Sprint-Dash — 2.0–3.5 A", group: "Single-Shaft Motors (Standard Chassis)", defaultMa: 2500, ratedMinMa: 2000, ratedMaxMa: 3500 },
+  { id: "ultra-dash", label: "Ultra-Dash (Non-Official) — 2.8–3.5+ A", group: "Single-Shaft Motors (Standard Chassis)", defaultMa: 2500, ratedMinMa: 2800, ratedMaxMa: 3500 },
+  // Dual-Shaft PRO Motors (MS / MA Chassis)
+  { id: "light-dash-pro", label: "Light-Dash PRO — 1.5–2.2 A", group: "Dual-Shaft PRO Motors (MS / MA Chassis)", defaultMa: 1800, ratedMinMa: 1500, ratedMaxMa: 2200 },
+  { id: "torque-tuned-2-pro", label: "Torque-Tuned 2 PRO — 1.7–2.0 A", group: "Dual-Shaft PRO Motors (MS / MA Chassis)", defaultMa: 1800, ratedMinMa: 1700, ratedMaxMa: 2000 },
+  { id: "rev-tuned-2-pro", label: "Rev-Tuned 2 PRO — 1.7–2.2 A", group: "Dual-Shaft PRO Motors (MS / MA Chassis)", defaultMa: 1900, ratedMinMa: 1700, ratedMaxMa: 2200 },
+  { id: "atomic-tuned-2-pro", label: "Atomic-Tuned 2 PRO — 1.8–2.2 A", group: "Dual-Shaft PRO Motors (MS / MA Chassis)", defaultMa: 2000, ratedMinMa: 1800, ratedMaxMa: 2200 },
+  { id: "hyper-dash-pro", label: "Hyper-Dash PRO — 1.6–3.0 A", group: "Dual-Shaft PRO Motors (MS / MA Chassis)", defaultMa: 2300, ratedMinMa: 1600, ratedMaxMa: 3000 },
+  { id: "mach-dash-pro", label: "Mach-Dash PRO — 2.0–3.5 A", group: "Dual-Shaft PRO Motors (MS / MA Chassis)", defaultMa: 2500, ratedMinMa: 2000, ratedMaxMa: 3500 },
+  { id: "plasma-dash-pro", label: "Plasma-Dash PRO (Non-Official) — High Draw", group: "Dual-Shaft PRO Motors (MS / MA Chassis)", defaultMa: 2500, ratedMinMa: 2800, ratedMaxMa: 4000 },
+  // Custom
+  { id: "custom", label: "Custom (Manual Current Draw)", group: "Custom Load", defaultMa: 2500, ratedMinMa: null, ratedMaxMa: null }
+];
+
+const dynoState = {
+  active: false,
+  starting: false,
+  presetId: "mach-dash-pro",
+  targetCurrentMa: 2500,
+  dur: 45,
+  note: "",
+  selectedSlots: [true, true, false, false],
+  cellNames: ["", "", "", ""],
+  confirmArmedUntil: 0,
+  confirmTimer: null,
+  tickTimer: null,
+  pendingWatchdog: null,
+  startTimeMs: 0,
+  lastAnyTelemetryMs: 0,
+  cooldownUntil: 0,
+  activeRun: null,
+  viewedRunId: null,
+  rankingFilterKey: null,
+  includeUnnamedInRanking: false
+};
+
+function escapeHtmlStr(str) {
+  return String(str ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function isDynoSessionActive() {
+  return Boolean(dynoState.active || dynoState.starting);
+}
+
+function getDynoPresetById(id) {
+  return TAMIYA_MOTOR_PRESETS.find((p) => p.id === id) || TAMIYA_MOTOR_PRESETS[TAMIYA_MOTOR_PRESETS.length - 1];
+}
+
+// Build 0x94 Mode 1 Discharge frame for Motor Dyno.
+// CRITICAL (Firmware 0x0800786C / 0x0800BABE): setting outStopCurrentMa === dischargeMa disables
+// Linear Current Reduce ("Current Reduce = OFF") so the cell holds constant load all the way to 1.00 V.
+function buildDynoDischargeFrame(slotMask, dischargeMa) {
+  const clampedMa = Math.max(MIN_DYNO_CURRENT_MA, Math.min(MAX_DYNO_CURRENT_MA, Math.round(Number(dischargeMa) || 2500)));
+  return buildNc3000SetFrame({
+    slotMask,
+    model: 1,
+    chargeMa: 1000,
+    dischargeMa: clampedMa,
+    capacityMah: 300,
+    inStopVoltageMv: 1480,
+    outStopVoltageMv: 1000,
+    inStopCurrentMa: 100,
+    outStopCurrentMa: clampedMa,
+    chargeRestMin: 10,
+    dischargeRestMin: 10,
+    cycleCount: 1,
+    cycleMode: 0,
+    deltaVMv: 5,
+    trickleMa: 0,
+    restartVoltMv: 1290,
+    tempProtectC: 71,
+    inTimeProtectMin: 10,
+    maxBoostCapMah: 300,
+    turboMode: 0
+  });
+}
+
+function loadDynoPrefs() {
+  try {
+    const raw = localStorage.getItem(DYNO_PREFS_KEY);
+    if (!raw) return;
+    const p = JSON.parse(raw);
+    if (p.presetId) dynoState.presetId = p.presetId;
+    if (Number.isFinite(p.targetCurrentMa)) {
+      dynoState.targetCurrentMa = Math.max(MIN_DYNO_CURRENT_MA, Math.min(MAX_DYNO_CURRENT_MA, Math.round(p.targetCurrentMa)));
+    }
+    if (Number.isFinite(p.dur)) dynoState.dur = p.dur;
+    if (typeof p.note === "string") dynoState.note = p.note;
+    if (Array.isArray(p.selectedSlots) && p.selectedSlots.length === 4) {
+      dynoState.selectedSlots = p.selectedSlots.map(Boolean);
+    }
+    if (Array.isArray(p.cellNames) && p.cellNames.length === 4) {
+      dynoState.cellNames = p.cellNames.map((n) => String(n || ""));
+    }
+    if (typeof p.includeUnnamedInRanking === "boolean") {
+      dynoState.includeUnnamedInRanking = p.includeUnnamedInRanking;
+    }
+  } catch (_) {}
+}
+
+function saveDynoPrefs() {
+  try {
+    localStorage.setItem(DYNO_PREFS_KEY, JSON.stringify({
+      presetId: dynoState.presetId,
+      targetCurrentMa: dynoState.targetCurrentMa,
+      dur: dynoState.dur,
+      note: dynoState.note,
+      selectedSlots: dynoState.selectedSlots,
+      cellNames: dynoState.cellNames,
+      includeUnnamedInRanking: dynoState.includeUnnamedInRanking
+    }));
+  } catch (_) {}
+}
+
+function loadDynoSavedRuns() {
+  try {
+    const raw = localStorage.getItem(DYNO_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function saveDynoRuns(runs) {
+  try {
+    localStorage.setItem(DYNO_STORAGE_KEY, JSON.stringify(runs));
+  } catch (_) {}
+}
+
+function populateDynoPresetSelect() {
+  const sel = document.getElementById("dynoMotorPreset");
+  if (!sel) return;
+  const groups = new Map();
+  TAMIYA_MOTOR_PRESETS.forEach((p) => {
+    if (!groups.has(p.group)) groups.set(p.group, []);
+    groups.get(p.group).push(p);
+  });
+  sel.innerHTML = "";
+  groups.forEach((items, groupLabel) => {
+    const og = document.createElement("optgroup");
+    og.label = groupLabel;
+    items.forEach((p) => {
+      const opt = document.createElement("option");
+      opt.value = p.id;
+      const capTag = p.ratedMaxMa && p.ratedMaxMa > MAX_DYNO_CURRENT_MA
+        ? (p.defaultMa >= MAX_DYNO_CURRENT_MA ? ` • 2.5A Cap` : ` • ${(p.ratedMaxMa / 1000).toFixed(1)}A Peak`)
+        : "";
+      opt.textContent = p.id === "custom" ? p.label : `${p.label} (${p.defaultMa} mA${capTag})`;
+      og.appendChild(opt);
+    });
+    sel.appendChild(og);
+  });
+  sel.value = dynoState.presetId;
+}
+
+function interpolateDynoVoltageAt(samples, targetSec) {
+  if (!Array.isArray(samples) || samples.length === 0) return null;
+  const loaded = samples.filter((s) => s && typeof s.t === "number" && typeof s.v === "number" && s.t >= 0.3);
+  if (loaded.length === 0) return null;
+
+  for (const s of loaded) {
+    if (Math.abs(s.t - targetSec) <= 0.05) return +s.v.toFixed(4);
+  }
+
+  let prev = null;
+  let next = null;
+  for (const s of loaded) {
+    if (s.t <= targetSec) prev = s;
+    if (s.t >= targetSec && !next) next = s;
+  }
+
+  if (prev && next && next.t > prev.t && (next.t - prev.t) <= 3.5) {
+    const ratio = (targetSec - prev.t) / (next.t - prev.t);
+    return +(prev.v + ratio * (next.v - prev.v)).toFixed(4);
+  }
+
+  let nearest = null;
+  let bestDist = Infinity;
+  for (const s of loaded) {
+    const d = Math.abs(s.t - targetSec);
+    if (d < bestDist) {
+      bestDist = d;
+      nearest = s;
+    }
+  }
+  return bestDist <= 2.0 && nearest ? +nearest.v.toFixed(4) : null;
+}
+
+function computeMedian(nums) {
+  if (!nums.length) return 0;
+  const sorted = [...nums].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 !== 0 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+}
+
+function computeDynoSlotMetrics(slotRun, dur, targetCurrentMa, ratedMaxMa) {
+  const samples = [...(slotRun.samples || [])].sort((a, b) => a.t - b.t);
+  const windowSamples = samples.filter((s) => s.t >= 0.5 && s.t <= dur + 0.5);
+  const loadedAll = samples.filter((s) => s.t >= 0.5);
+
+  const score = windowSamples.length >= 3
+    ? +(windowSamples.reduce((acc, s) => acc + s.v, 0) / windowSamples.length).toFixed(4)
+    : null;
+  const iAvg = windowSamples.length >= 1
+    ? Math.round(windowSamples.reduce((acc, s) => acc + (s.i || 0), 0) / windowSamples.length)
+    : null;
+  const currentThrottled = iAvg != null && Math.abs(iAvg - targetCurrentMa) > 200;
+
+  let vMin = null;
+  for (const s of loadedAll) {
+    if (vMin == null || s.v < vMin) vMin = +s.v.toFixed(4);
+  }
+
+  const v1sSample = samples.find((s) => s.t >= 1.0) || samples.find((s) => s.t >= 0.3) || null;
+  const punchDrop = (slotRun.v0 != null && v1sSample)
+    ? +(slotRun.v0 - v1sSample.v).toFixed(3)
+    : null;
+
+  const checkpoints = {};
+  DYNO_CHECKPOINTS.forEach((sec) => {
+    checkpoints[sec] = interpolateDynoVoltageAt(samples, sec);
+  });
+  checkpoints[dur] = interpolateDynoVoltageAt(samples, dur);
+
+  const v10 = checkpoints[10] ?? null;
+  const vEnd = checkpoints[dur] ?? null;
+  const lateSag = (dur > 10 && v10 != null && vEnd != null)
+    ? +(v10 - vEnd).toFixed(3)
+    : null;
+
+  // Firmware computes IR only after load current engages (0x080077DE); use median non-zero IR after 5s
+  const lateIrSamples = samples.filter((s) => s.t >= 5.0 && s.ir > 0).map((s) => s.ir);
+  const anyIrSamples = samples.filter((s) => s.ir > 0).map((s) => s.ir);
+  const irMohm = lateIrSamples.length > 0
+    ? computeMedian(lateIrSamples)
+    : (anyIrSamples.length > 0 ? anyIrSamples[anyIrSamples.length - 1] : 0);
+
+  let estPeakLoadV = null;
+  if (ratedMaxMa && ratedMaxMa > MAX_DYNO_CURRENT_MA && ratedMaxMa > targetCurrentMa && score != null && irMohm > 0) {
+    const iRef = iAvg != null ? iAvg : targetCurrentMa;
+    if (ratedMaxMa > iRef) {
+      estPeakLoadV = +(score - ((ratedMaxMa - iRef) / 1000) * (irMohm / 1000)).toFixed(4);
+    }
+  }
+
+  return {
+    score,
+    iAvg,
+    currentThrottled,
+    vMin,
+    v1s: v1sSample ? +v1sSample.v.toFixed(4) : null,
+    punchDrop,
+    v10,
+    vEnd,
+    lateSag,
+    checkpoints,
+    irMohm,
+    estPeakLoadV
+  };
+}
+
+function computeBestPairs(poolCells) {
+  const valid = (poolCells || []).filter((c) => c && typeof c.score === "number" && !Number.isNaN(c.score));
+  if (valid.length < 2) return { topPairs: [], disjointPairs: [] };
+
+  const pairs = [];
+  for (let i = 0; i < valid.length; i++) {
+    for (let j = i + 1; j < valid.length; j++) {
+      const a = valid[i];
+      const b = valid[j];
+      const combinedScore = +(a.score + b.score).toFixed(4);
+      const avgScore = +((a.score + b.score) / 2).toFixed(4);
+      const deltaScoreMv = Math.round(Math.abs(a.score - b.score) * 1000);
+      const deltaVendMv = (a.vEnd != null && b.vEnd != null)
+        ? Math.round(Math.abs(a.vEnd - b.vEnd) * 1000)
+        : null;
+      const deltaIrMohm = (a.irMohm > 0 && b.irMohm > 0) ? Math.abs(a.irMohm - b.irMohm) : 0;
+      const pairRatingMv = Math.round(
+        avgScore * 1000
+        - 2.0 * deltaScoreMv
+        - 0.5 * (deltaVendMv != null ? deltaVendMv : deltaScoreMv)
+        - 0.25 * deltaIrMohm
+      );
+      pairs.push({
+        cellA: a,
+        cellB: b,
+        combinedScore,
+        avgScore,
+        deltaScoreMv,
+        deltaVendMv,
+        deltaIrMohm,
+        pairRatingMv
+      });
+    }
+  }
+
+  pairs.sort((p, q) => {
+    if (q.pairRatingMv !== p.pairRatingMv) return q.pairRatingMv - p.pairRatingMv;
+    return p.deltaIrMohm - q.deltaIrMohm;
+  });
+
+  const usedNames = new Set();
+  const disjointPairs = [];
+  for (const pair of pairs) {
+    const keyA = pair.cellA.cellKey || pair.cellA.cellName;
+    const keyB = pair.cellB.cellKey || pair.cellB.cellName;
+    if (!usedNames.has(keyA) && !usedNames.has(keyB)) {
+      disjointPairs.push(pair);
+      usedNames.add(keyA);
+      usedNames.add(keyB);
+    }
+  }
+
+  return {
+    topPairs: pairs.slice(0, 6),
+    disjointPairs
+  };
+}
+
+function getDynoSelectedSlotIndices() {
+  const indices = [];
+  for (let i = 0; i < 4; i++) {
+    if (dynoState.selectedSlots[i]) indices.push(i);
+  }
+  return indices;
+}
+
+function updateDynoBannersUI() {
+  const preset = getDynoPresetById(dynoState.presetId);
+  const clampedBanner = document.getElementById("dynoClampedBanner");
+  const clampedText = document.getElementById("dynoClampedText");
+  if (clampedBanner && clampedText) {
+    const isClamped = Boolean(preset.ratedMaxMa && preset.ratedMaxMa > MAX_DYNO_CURRENT_MA);
+    clampedBanner.classList.toggle("hidden", !isClamped);
+    if (isClamped) {
+      clampedText.innerHTML =
+        `<strong>${escapeHtmlStr(preset.label.split(" — ")[0])}</strong> draws up to `
+        + `<strong>${(preset.ratedMaxMa / 1000).toFixed(1)} A peak</strong>, above the NC3000 Pro's `
+        + `<strong>${MAX_DYNO_CURRENT_MA} mA</strong> Mode 1 ceiling. Results will project `
+        + `<strong>Est. V @ Peak</strong> using each cell's measured IR.`;
+    }
+  }
+
+  const selectedCount = getDynoSelectedSlotIndices().length;
+  const nomWatts = +(selectedCount * (dynoState.targetCurrentMa / 1000) * 1.25).toFixed(1);
+  const peakWatts = +(selectedCount * (dynoState.targetCurrentMa / 1000) * 1.45).toFixed(1);
+  const readout = document.getElementById("dynoEstPowerReadout");
+  const overBudget = selectedCount >= 3 && peakWatts > 13.5;
+
+  if (readout) {
+    readout.textContent = overBudget
+      ? `Est. Load: ~${nomWatts.toFixed(1)} W nom / ${peakWatts.toFixed(1)} W peak (Near 15W Ceiling)`
+      : `Est. Load: ~${nomWatts.toFixed(1)} W (Safe)`;
+    readout.classList.toggle("warn", overBudget);
+  }
+
+  const budgetBanner = document.getElementById("dynoPowerBudgetBanner");
+  const budgetText = document.getElementById("dynoPowerBudgetText");
+  if (budgetBanner && budgetText) {
+    budgetBanner.classList.toggle("hidden", !overBudget);
+    if (overBudget) {
+      budgetText.innerHTML =
+        `<strong>15 W Power Budget Notice:</strong> Running ${selectedCount} slots at ${dynoState.targetCurrentMa} mA (~${nomWatts.toFixed(1)} W nominal, ~${peakWatts.toFixed(1)} W fresh-charged peak) approaches the NC3000 Pro's 15 W total discharge ceiling and may throttle mid-run. Test one pair at a time for full current:`;
+    }
+  }
+}
+
+function updateDynoControlButtons() {
+  const isConnected = !!(gattServer && gattServer.connected) || document.body.classList.contains("ble-connected") || (statusIndicator && statusIndicator.classList.contains("connected"));
+  const active = isDynoSessionActive();
+  const btnRun = document.getElementById("btnDynoRun");
+  const btnStop = document.getElementById("btnDynoStop");
+  const pulseDot = document.getElementById("dynoPulseDot");
+  const selectedCount = getDynoSelectedSlotIndices().length;
+
+  if (pulseDot) pulseDot.classList.toggle("hidden", !active);
+
+  if (btnRun) {
+    btnRun.classList.toggle("hidden", active);
+    btnRun.disabled = !isConnected || active || selectedCount === 0;
+    if (dynoState.confirmArmedUntil > Date.now() && !active) {
+      const remSec = Math.max(1, Math.ceil((dynoState.confirmArmedUntil - Date.now()) / 1000));
+      btnRun.textContent = `⚡ Confirm Start (${remSec}s)`;
+      btnRun.classList.add("confirm-armed");
+    } else {
+      btnRun.textContent = "▶ Run Dyno Test";
+      btnRun.classList.remove("confirm-armed");
+    }
+  }
+
+  if (btnStop) {
+    btnStop.classList.toggle("hidden", !active);
+    btnStop.disabled = !active;
+  }
+
+  updateDynoBannersUI();
+}
+
+function clearDynoConfirmArm() {
+  dynoState.confirmArmedUntil = 0;
+  if (dynoState.confirmTimer) {
+    clearInterval(dynoState.confirmTimer);
+    dynoState.confirmTimer = null;
+  }
+  updateDynoControlButtons();
+}
+
+function updateDynoSlotCardLive(slotIdx, info) {
+  const vEl = document.getElementById(`dynoSlotLiveV-${slotIdx}`);
+  const iEl = document.getElementById(`dynoSlotLiveI-${slotIdx}`);
+  const irEl = document.getElementById(`dynoSlotLiveIr-${slotIdx}`);
+  const stateEl = document.getElementById(`dynoSlotState-${slotIdx}`);
+  const cardEl = document.getElementById(`dynoSlotCard-${slotIdx}`);
+
+  if (info && info.hasBattery) {
+    if (vEl) vEl.textContent = `${(info.voltageMv / 1000).toFixed(3)} V`;
+    if (iEl) iEl.textContent = `${info.currentMa} mA`;
+    if (irEl) irEl.textContent = info.irMohm > 0 ? `${info.irMohm} mΩ` : "— mΩ";
+  } else {
+    if (vEl) vEl.textContent = "—.——— V";
+    if (iEl) iEl.textContent = "0 mA";
+    if (irEl) irEl.textContent = "— mΩ";
+  }
+
+  const slotRun = dynoState.activeRun?.slots?.find((s) => s.slotIdx === slotIdx);
+  if (stateEl && cardEl) {
+    stateEl.className = "dyno-slot-state mono";
+    cardEl.classList.remove("dyno-running");
+    if (dynoState.active && slotRun) {
+      if (slotRun.thermalFault) {
+        stateEl.textContent = "🔥 Thermal";
+        stateEl.classList.add("error");
+      } else if (slotRun.earlyCutoff) {
+        stateEl.textContent = "🛑 Cutoff";
+        stateEl.classList.add("done");
+      } else if (slotRun.finished) {
+        stateEl.textContent = "✅ Done";
+        stateEl.classList.add("done");
+      } else if (slotRun.started) {
+        stateEl.textContent = "Discharging";
+        stateEl.classList.add("discharging");
+        cardEl.classList.add("dyno-running");
+      } else {
+        stateEl.textContent = "Starting…";
+      }
+    } else if (!info || !info.hasBattery) {
+      stateEl.textContent = "Empty";
+    } else if (info.errorState > 0) {
+      stateEl.textContent = info.chargerStatusLabel || "Error";
+      stateEl.classList.add("error");
+    } else {
+      stateEl.textContent = info.chargerStatusLabel || "Standby";
+    }
+  }
+}
+
+function getViewedDynoRun() {
+  if (dynoState.activeRun && (!dynoState.viewedRunId || dynoState.viewedRunId === dynoState.activeRun.id)) {
+    return dynoState.activeRun;
+  }
+  const saved = loadDynoSavedRuns();
+  if (dynoState.viewedRunId) {
+    const match = saved.find((r) => r.id === dynoState.viewedRunId);
+    if (match) return match;
+  }
+  return dynoState.activeRun || saved[0] || null;
+}
+
+function renderDynoSvgChart(run) {
+  const container = document.getElementById("dynoSvgChartContainer");
+  const titleEl = document.getElementById("dynoChartTitle");
+  const subEl = document.getElementById("dynoChartSubtitle");
+  const warnWrap = document.getElementById("dynoRunWarnings");
+  if (!container) return;
+
+  if (!run || !Array.isArray(run.slots) || run.slots.length === 0) {
+    if (titleEl) titleEl.textContent = "Loaded Voltage Discharge Curve";
+    if (subEl) subEl.textContent = "Run a test or select a saved run below to inspect voltage-under-load curves and sag checkpoints.";
+    if (warnWrap) warnWrap.innerHTML = "";
+    container.innerHTML = `<div class="dyno-empty-state">No dyno test active or loaded yet. Connect your NC3000 Pro, pick a Tamiya motor preset, and click <strong>Run Dyno Test</strong>.</div>`;
+    return;
+  }
+
+  const dur = run.dur || 45;
+  if (titleEl) {
+    titleEl.textContent = `${run.presetLabel || "Custom"} — ${run.targetCurrentMa} mA × ${dur}s`;
+  }
+  if (subEl) {
+    const ts = run.createdAt ? new Date(run.createdAt).toLocaleString() : "In progress…";
+    subEl.textContent = `${ts}${run.note ? ` • ${run.note}` : ""}${run.abortedReason ? ` • Aborted: ${run.abortedReason}` : ""}`;
+  }
+
+  // Warnings badges
+  if (warnWrap) {
+    const badges = [];
+    const v0s = run.slots.map((s) => s.v0).filter((v) => typeof v === "number");
+    if (v0s.length >= 2) {
+      const spreadMv = Math.round((Math.max(...v0s) - Math.min(...v0s)) * 1000);
+      if (spreadMv > 20) {
+        badges.push(`<span class="dyno-warn-badge">v0 Spread: ${spreadMv} mV (&gt;20 mV)</span>`);
+      }
+    }
+    if (run.slots.some((s) => s.trickleStart)) {
+      badges.push(`<span class="dyno-warn-badge info">⚡ Trickle Start on ≥1 slot</span>`);
+    }
+    if (run.slots.some((s) => s.metrics?.currentThrottled)) {
+      badges.push(`<span class="dyno-warn-badge danger">⚠️ Current Throttled (&gt;±200 mA)</span>`);
+    }
+    if (run.slots.some((s) => s.thermalFault)) {
+      badges.push(`<span class="dyno-warn-badge danger">🔥 Hardware Thermal Cutoff (80°C)</span>`);
+    }
+    if (run.slots.some((s) => s.earlyCutoff)) {
+      badges.push(`<span class="dyno-warn-badge danger">🛑 Early 1.00V Cutoff</span>`);
+    }
+    warnWrap.innerHTML = badges.join("");
+  }
+
+  // Determine Y-axis bounds across all samples
+  let minV = 1.0;
+  let maxV = 1.5;
+  const allVs = [];
+  run.slots.forEach((s) => {
+    if (typeof s.v0 === "number") allVs.push(s.v0);
+    (s.samples || []).forEach((pt) => {
+      if (typeof pt.v === "number") allVs.push(pt.v);
+    });
+  });
+  if (allVs.length > 0) {
+    minV = Math.max(0.85, Math.floor((Math.min(...allVs) - 0.03) * 20) / 20);
+    maxV = Math.min(1.65, Math.ceil((Math.max(...allVs) + 0.03) * 20) / 20);
+    if (maxV - minV < 0.15) maxV = minV + 0.15;
+  }
+
+  const W = 760;
+  const H = 250;
+  const padL = 48;
+  const padR = 16;
+  const padT = 14;
+  const padB = 28;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const xOf = (t) => padL + (Math.max(0, Math.min(dur, t)) / dur) * plotW;
+  const yOf = (v) => padT + (1 - (Math.max(minV, Math.min(maxV, v)) - minV) / (maxV - minV)) * plotH;
+
+  let svgParts = [];
+  svgParts.push(`<svg class="dyno-svg-chart" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Dyno voltage discharge curves">`);
+
+  // Horizontal grid lines
+  const ySteps = 4;
+  for (let g = 0; g <= ySteps; g++) {
+    const vVal = minV + ((maxV - minV) * g) / ySteps;
+    const y = yOf(vVal).toFixed(1);
+    svgParts.push(`<line x1="${padL}" y1="${y}" x2="${W - padR}" y2="${y}" stroke="#222b3d" stroke-width="1" />`);
+    svgParts.push(`<text x="${padL - 6}" y="${+y + 3}" text-anchor="end" fill="#6b778c" font-size="10" font-family="Fira Code, monospace">${vVal.toFixed(2)}V</text>`);
+  }
+
+  // Checkpoint vertical dashed lines (10s and dur)
+  const vLines = dur > 10 ? [10, dur] : [dur];
+  vLines.forEach((sec) => {
+    const x = xOf(sec).toFixed(1);
+    svgParts.push(`<line x1="${x}" y1="${padT}" x2="${x}" y2="${H - padB}" stroke="#3b4d6b" stroke-dasharray="4 3" stroke-width="1" />`);
+    svgParts.push(`<text x="${x}" y="${H - 8}" text-anchor="middle" fill="#9da9bb" font-size="10" font-family="Fira Code, monospace">${sec}s</text>`);
+  });
+  svgParts.push(`<text x="${padL}" y="${H - 8}" text-anchor="start" fill="#6b778c" font-size="10" font-family="Fira Code, monospace">0s</text>`);
+
+  // Slot polylines
+  const legendItems = [];
+  run.slots.forEach((slotRun) => {
+    const color = DYNO_SLOT_COLORS[slotRun.slotIdx % 4];
+    const pts = [];
+    if (typeof slotRun.v0 === "number") {
+      pts.push(`${xOf(0).toFixed(1)},${yOf(slotRun.v0).toFixed(1)}`);
+    }
+    const sortedSamples = [...(slotRun.samples || [])].sort((a, b) => a.t - b.t);
+    sortedSamples.forEach((s) => {
+      pts.push(`${xOf(s.t).toFixed(1)},${yOf(s.v).toFixed(1)}`);
+    });
+    if (pts.length >= 2) {
+      svgParts.push(`<polyline fill="none" stroke="${color}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" points="${pts.join(" ")}" />`);
+    }
+    sortedSamples.forEach((s) => {
+      svgParts.push(`<circle cx="${xOf(s.t).toFixed(1)}" cy="${yOf(s.v).toFixed(1)}" r="2.2" fill="${color}" />`);
+    });
+    const labelName = slotRun.cellName || `Slot ${slotRun.slotIdx + 1}`;
+    const scoreStr = slotRun.metrics?.score != null ? `Score ${slotRun.metrics.score.toFixed(4)}V` : "Collecting…";
+    legendItems.push(`<span class="dyno-legend-item"><i class="dyno-legend-swatch" style="background:${color};"></i>${escapeHtmlStr(labelName)} (S${slotRun.slotIdx + 1}): ${scoreStr}</span>`);
+  });
+
+  svgParts.push("</svg>");
+  container.innerHTML = svgParts.join("") + `<div class="dyno-svg-legend">${legendItems.join("")}</div>`;
+}
+
+function renderDynoResultsTable(run) {
+  const tbody = document.getElementById("dynoResultsTbody");
+  const metaEl = document.getElementById("dynoResultsMeta");
+  const thVend = document.getElementById("thVend");
+  const thEstPeakV = document.getElementById("thEstPeakV");
+  const twoCellBar = document.getElementById("dynoTwoCellDeltaBar");
+  if (!tbody) return;
+
+  if (!run || !Array.isArray(run.slots) || run.slots.length === 0) {
+    if (metaEl) metaEl.textContent = "—";
+    if (thVend) thVend.textContent = "V(end)";
+    if (thEstPeakV) thEstPeakV.classList.add("hidden");
+    if (twoCellBar) twoCellBar.classList.add("hidden");
+    tbody.innerHTML = `<tr><td colspan="12" class="dyno-table-empty">No run results loaded.</td></tr>`;
+    return;
+  }
+
+  const dur = run.dur || 45;
+  if (thVend) thVend.textContent = `V(${dur}s)`;
+
+  const showEstPeak = Boolean(
+    (run.ratedMaxMa && run.ratedMaxMa > MAX_DYNO_CURRENT_MA && run.ratedMaxMa > run.targetCurrentMa)
+    || run.slots.some((s) => s.metrics?.estPeakLoadV != null)
+  );
+  if (thEstPeakV) thEstPeakV.classList.toggle("hidden", !showEstPeak);
+
+  if (metaEl) {
+    metaEl.textContent = `${run.presetLabel || "Custom"} • ${run.targetCurrentMa} mA • ${dur}s • ${run.slots.length} cell(s)${run.note ? ` • ${run.note}` : ""}`;
+  }
+
+  const enriched = run.slots.map((s) => ({
+    ...s,
+    m: s.metrics || computeDynoSlotMetrics(s, dur, run.targetCurrentMa, run.ratedMaxMa)
+  }));
+  enriched.sort((a, b) => (b.m.score ?? -1) - (a.m.score ?? -1));
+
+  // Two-cell quick delta bar
+  if (twoCellBar) {
+    if (enriched.length === 2 && enriched[0].m.score != null && enriched[1].m.score != null) {
+      const a = enriched[0];
+      const b = enriched[1];
+      const combined = (a.m.score + b.m.score).toFixed(4);
+      const dScore = Math.round(Math.abs(a.m.score - b.m.score) * 1000);
+      const dVend = a.m.vEnd != null && b.m.vEnd != null ? `${Math.round(Math.abs(a.m.vEnd - b.m.vEnd) * 1000)} mV` : "—";
+      const dIr = a.m.irMohm > 0 && b.m.irMohm > 0 ? `${Math.abs(a.m.irMohm - b.m.irMohm)} mΩ` : "—";
+      twoCellBar.innerHTML =
+        `<span><strong>2-Cell Pack Match:</strong> ${escapeHtmlStr(a.cellName || `Slot ${a.slotIdx + 1}`)} + ${escapeHtmlStr(b.cellName || `Slot ${b.slotIdx + 1}`)}</span>`
+        + `<span>Pack Score: <strong>${combined} V</strong></span>`
+        + `<span>ΔScore: <strong>${dScore} mV</strong></span>`
+        + `<span>ΔV(${dur}s): <strong>${dVend}</strong></span>`
+        + `<span>ΔIR: <strong>${dIr}</strong></span>`;
+      twoCellBar.classList.remove("hidden");
+    } else {
+      twoCellBar.classList.add("hidden");
+    }
+  }
+
+  const rowsHtml = enriched.map((s, idx) => {
+    const m = s.m;
+    const color = DYNO_SLOT_COLORS[s.slotIdx % 4];
+    const displayName = escapeHtmlStr(s.cellName || `Slot ${s.slotIdx + 1}`);
+    const tags = [];
+    if (s.trickleStart) tags.push(`<span class="dyno-cell-tag trickle" title="Slot started directly from Trickle; V0 elevated">⚡ Trickle</span>`);
+    if (m.currentThrottled) tags.push(`<span class="dyno-cell-tag warn" title="Average current deviated &gt;200 mA from target">⚠️ Throttled</span>`);
+    if (s.thermalFault) tags.push(`<span class="dyno-cell-tag danger" title="80°C hardware thermal protection tripped">🔥 80°C</span>`);
+    else if (s.earlyCutoff) tags.push(`<span class="dyno-cell-tag danger" title="Hit 1.00V hardware cutoff early">🛑 Cutoff</span>`);
+
+    return `<tr class="mono">
+      <td>#${idx + 1}</td>
+      <td><span class="dyno-legend-swatch" style="background:${color};margin-right:6px;"></span><strong>${displayName}</strong> <span style="color:var(--text-2);">(S${s.slotIdx + 1})</span>${tags.join("")}</td>
+      <td class="dyno-score-hero">${m.score != null ? `${m.score.toFixed(4)} V` : "—"}</td>
+      ${showEstPeak ? `<td>${m.estPeakLoadV != null ? `${m.estPeakLoadV.toFixed(4)} V` : "—"}</td>` : ""}
+      <td>${s.v0 != null ? `${s.v0.toFixed(3)} V` : "—"}</td>
+      <td>${m.punchDrop != null ? `${Math.round(m.punchDrop * 1000)} mV` : "—"}</td>
+      <td>${m.v10 != null ? `${m.v10.toFixed(3)} V` : "—"}</td>
+      <td>${m.vEnd != null ? `${m.vEnd.toFixed(3)} V` : "—"}</td>
+      <td>${m.lateSag != null ? `${Math.round(m.lateSag * 1000)} mV` : "—"}</td>
+      <td>${m.vMin != null ? `${m.vMin.toFixed(3)} V` : "—"}</td>
+      <td>${m.iAvg != null ? `${m.iAvg} mA` : "—"}</td>
+      <td>${m.irMohm > 0 ? `${m.irMohm} mΩ` : "—"}</td>
+    </tr>`;
+  });
+
+  tbody.innerHTML = rowsHtml.join("");
+}
+
+function renderDynoRankingAndPairs() {
+  const pillsEl = document.getElementById("dynoRankingFilterPills");
+  const recPanel = document.getElementById("dynoPairRecommenderPanel");
+  const rankTbody = document.getElementById("dynoRankingTbody");
+  if (!pillsEl || !rankTbody) return;
+
+  const savedRuns = loadDynoSavedRuns();
+  const comboMap = new Map();
+  savedRuns.forEach((r) => {
+    const dur = r.dur || 45;
+    const cur = r.targetCurrentMa || 2500;
+    const key = `${dur}_${cur}`;
+    if (!comboMap.has(key)) {
+      comboMap.set(key, { key, dur, targetCurrentMa: cur, label: `${dur}s @ ${cur} mA`, count: 0 });
+    }
+    comboMap.get(key).count += 1;
+  });
+
+  const combos = Array.from(comboMap.values());
+  if (combos.length === 0) {
+    pillsEl.innerHTML = "";
+    if (recPanel) recPanel.classList.add("hidden");
+    rankTbody.innerHTML = `<tr><td colspan="10" class="dyno-table-empty">Complete and save a dyno run to unlock leaderboard rankings and pair matching.</td></tr>`;
+    return;
+  }
+
+  if (!dynoState.rankingFilterKey || !comboMap.has(dynoState.rankingFilterKey)) {
+    dynoState.rankingFilterKey = combos[0].key;
+  }
+
+  pillsEl.innerHTML = combos.map((c) => `
+    <button type="button" class="dyno-filter-pill ${c.key === dynoState.rankingFilterKey ? "active" : ""}" data-dyno-filter="${c.key}">
+      ${escapeHtmlStr(c.label)} (${c.count})
+    </button>
+  `).join("");
+
+  const activeCombo = comboMap.get(dynoState.rankingFilterKey);
+  // Deduplicate to latest run per unique named cell within this (dur, targetCurrentMa) pool
+  const latestByCell = new Map();
+  const matchingRuns = savedRuns.filter((r) => `${r.dur || 45}_${r.targetCurrentMa || 2500}` === activeCombo.key);
+  matchingRuns.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  matchingRuns.forEach((run) => {
+    (run.slots || []).forEach((slotRun) => {
+      const m = slotRun.metrics || computeDynoSlotMetrics(slotRun, run.dur, run.targetCurrentMa, run.ratedMaxMa);
+      if (m.score == null) return;
+      const rawName = String(slotRun.cellName || "").trim();
+      const isGeneric = !rawName || /^slot\s*\d+$/i.test(rawName);
+      if (isGeneric && !dynoState.includeUnnamedInRanking) return;
+
+      const cellKey = isGeneric ? `__unnamed_${run.id}_s${slotRun.slotIdx}` : rawName.toLowerCase();
+      if (!latestByCell.has(cellKey)) {
+        latestByCell.set(cellKey, {
+          cellKey,
+          cellName: rawName || `Slot ${slotRun.slotIdx + 1}`,
+          presetLabel: (run.presetLabel || "Custom").split(" — ")[0],
+          score: m.score,
+          punchDrop: m.punchDrop,
+          lateSag: m.lateSag,
+          vEnd: m.vEnd,
+          irMohm: m.irMohm,
+          createdAt: run.createdAt
+        });
+      }
+    });
+  });
+
+  const poolCells = Array.from(latestByCell.values()).sort((a, b) => b.score - a.score);
+
+  if (poolCells.length === 0) {
+    if (recPanel) recPanel.classList.add("hidden");
+    rankTbody.innerHTML = `<tr><td colspan="10" class="dyno-table-empty">No named cells found for ${escapeHtmlStr(activeCombo.label)}. Name your cells or check "Include unnamed Slot N runs".</td></tr>`;
+    return;
+  }
+
+  // Best-Pair Recommender (hidden when < 2 unique cells; shows optimal pairs when >= 3, or pair summary when == 2)
+  if (recPanel) {
+    if (poolCells.length >= 2) {
+      const { topPairs, disjointPairs } = computeBestPairs(poolCells);
+      const displayPairs = poolCells.length >= 3 ? disjointPairs.concat(topPairs.filter((p) => !disjointPairs.includes(p))).slice(0, 4) : topPairs.slice(0, 1);
+      recPanel.innerHTML = displayPairs.map((pair, idx) => {
+        const badgeTitle = poolCells.length >= 3 ? (idx === 0 ? "🥇 Best Race Pair" : idx === 1 ? "🥈 2nd Pair" : `Option #${idx + 1}`) : "🤝 Tested Pair";
+        return `<div class="dyno-pair-rec-card ${idx === 0 ? "rank-1" : ""}">
+          <div class="dyno-pair-rec-head">
+            <span>${badgeTitle}: ${escapeHtmlStr(pair.cellA.cellName)} + ${escapeHtmlStr(pair.cellB.cellName)}</span>
+            <span class="mono" style="color:#34d399;">${pair.combinedScore.toFixed(4)} V</span>
+          </div>
+          <div class="dyno-pair-rec-meta">
+            <span>Avg: ${pair.avgScore.toFixed(4)} V</span>
+            <span>ΔScore: ${pair.deltaScoreMv} mV</span>
+            <span>ΔEnd: ${pair.deltaVendMv != null ? `${pair.deltaVendMv} mV` : "—"}</span>
+            <span>ΔIR: ${pair.deltaIrMohm} mΩ</span>
+            <span>Rating: ${pair.pairRatingMv}</span>
+          </div>
+        </div>`;
+      }).join("");
+      recPanel.classList.remove("hidden");
+    } else {
+      recPanel.classList.add("hidden");
+    }
+  }
+
+  const leaderScore = poolCells[0].score;
+  rankTbody.innerHTML = poolCells.map((c, idx) => {
+    const deltaMv = Math.round((c.score - leaderScore) * 1000);
+    return `<tr class="mono">
+      <td>#${idx + 1}</td>
+      <td><strong>${escapeHtmlStr(c.cellName)}</strong></td>
+      <td>${escapeHtmlStr(c.presetLabel)}</td>
+      <td class="dyno-score-hero">${c.score.toFixed(4)} V</td>
+      <td>${idx === 0 ? "Leader" : `${deltaMv} mV`}</td>
+      <td>${c.punchDrop != null ? `${Math.round(c.punchDrop * 1000)} mV` : "—"}</td>
+      <td>${c.lateSag != null ? `${Math.round(c.lateSag * 1000)} mV` : "—"}</td>
+      <td>${c.vEnd != null ? `${c.vEnd.toFixed(3)} V` : "—"}</td>
+      <td>${c.irMohm > 0 ? `${c.irMohm} mΩ` : "—"}</td>
+      <td>${c.createdAt ? new Date(c.createdAt).toLocaleDateString() : "—"}</td>
+    </tr>`;
+  }).join("");
+}
+
+function renderDynoHistoryList() {
+  const listEl = document.getElementById("dynoHistoryList");
+  const countEl = document.getElementById("dynoHistoryCount");
+  if (!listEl) return;
+
+  const savedRuns = loadDynoSavedRuns();
+  if (countEl) countEl.textContent = `${savedRuns.length} saved run(s)`;
+  if (savedRuns.length === 0) {
+    listEl.innerHTML = `<div class="dyno-empty-state">No saved dyno runs yet.</div>`;
+    return;
+  }
+
+  const viewed = getViewedDynoRun();
+  listEl.innerHTML = savedRuns.map((r) => {
+    const isSelected = viewed && viewed.id === r.id;
+    const cellSummary = (r.slots || []).map((s) => `${s.cellName || `S${s.slotIdx + 1}`}${s.metrics?.score != null ? ` (${s.metrics.score.toFixed(3)}V)` : ""}`).join(" • ");
+    const ts = r.createdAt ? new Date(r.createdAt).toLocaleString() : "";
+    return `<div class="dyno-history-item ${isSelected ? "active" : ""}" data-dyno-run-id="${escapeHtmlStr(r.id)}">
+      <div class="dyno-history-info">
+        <div class="dyno-history-title">${escapeHtmlStr(r.presetLabel || "Custom")} — ${r.targetCurrentMa} mA × ${r.dur}s</div>
+        <div class="dyno-history-sub mono">${escapeHtmlStr(ts)} • ${escapeHtmlStr(cellSummary)}${r.note ? ` • ${escapeHtmlStr(r.note)}` : ""}</div>
+      </div>
+      <button type="button" class="btn small danger dyno-delete-run-btn" data-dyno-delete-id="${escapeHtmlStr(r.id)}" title="Delete this saved run">✕</button>
+    </div>`;
+  }).join("");
+}
+
+function renderDynoAll() {
+  const viewed = getViewedDynoRun();
+  renderDynoSvgChart(viewed);
+  renderDynoResultsTable(viewed);
+  renderDynoRankingAndPairs();
+  renderDynoHistoryList();
+  updateDynoControlButtons();
+}
+
+function handleDynoPresetChange(presetId) {
+  const preset = getDynoPresetById(presetId);
+  dynoState.presetId = preset.id;
+  if (preset.id !== "custom") {
+    dynoState.targetCurrentMa = preset.defaultMa;
+    const curInput = document.getElementById("dynoCurrentMa");
+    if (curInput) curInput.value = String(preset.defaultMa);
+  }
+  saveDynoPrefs();
+  updateDynoBannersUI();
+}
+
+function handleDynoCurrentInput(rawVal) {
+  const parsed = parseInt(rawVal, 10);
+  if (Number.isNaN(parsed)) return;
+  const clamped = Math.max(MIN_DYNO_CURRENT_MA, Math.min(MAX_DYNO_CURRENT_MA, parsed));
+  dynoState.targetCurrentMa = clamped;
+  dynoState.presetId = "custom";
+  const sel = document.getElementById("dynoMotorPreset");
+  if (sel) sel.value = "custom";
+  saveDynoPrefs();
+  updateDynoBannersUI();
+}
+
+function setDynoDuration(durSec) {
+  const clamped = Math.max(10, Math.min(180, parseInt(durSec, 10) || 45));
+  dynoState.dur = clamped;
+  document.querySelectorAll(".dyno-dur-btn").forEach((btn) => {
+    btn.classList.toggle("active", parseInt(btn.getAttribute("data-dyno-dur"), 10) === clamped);
+  });
+  saveDynoPrefs();
+}
+
+function setDynoSelectedSlots(boolArr) {
+  for (let i = 0; i < 4; i++) {
+    dynoState.selectedSlots[i] = Boolean(boolArr[i]);
+    const chk = document.getElementById(`dynoSlotChk-${i}`);
+    if (chk) chk.checked = dynoState.selectedSlots[i];
+    const card = document.getElementById(`dynoSlotCard-${i}`);
+    if (card) card.classList.toggle("unchecked", !dynoState.selectedSlots[i]);
+  }
+  saveDynoPrefs();
+  updateDynoControlButtons();
+}
+
+function updateDynoProgressUI() {
+  const wrap = document.getElementById("dynoProgressWrap");
+  const bar = document.getElementById("dynoProgressBar");
+  const txt = document.getElementById("dynoProgressText");
+  const timer = document.getElementById("dynoElapsedTimer");
+  if (!wrap) return;
+
+  if (!dynoState.active || !dynoState.activeRun) {
+    wrap.classList.add("hidden");
+    return;
+  }
+
+  wrap.classList.remove("hidden");
+  const dur = dynoState.activeRun.dur || 45;
+  const maxElapsed = dynoState.activeRun.slots.reduce((mx, s) => Math.max(mx, s.elapsedSec || 0), 0);
+  const pct = Math.max(0, Math.min(100, (maxElapsed / dur) * 100));
+  if (bar) bar.style.width = `${pct.toFixed(1)}%`;
+  if (timer) timer.textContent = `${maxElapsed.toFixed(1)}s / ${dur}s`;
+
+  const startedCount = dynoState.activeRun.slots.filter((s) => s.started).length;
+  if (txt) {
+    txt.textContent = startedCount === 0
+      ? "Dispatching Mode 1 Discharge commands & waiting for load lock…"
+      : `Mode 1 Dyno Running (${startedCount}/${dynoState.activeRun.slots.length} slot(s) under ${dynoState.activeRun.targetCurrentMa} mA load)…`;
+  }
+}
+
+async function stopAllDynoSlotsOnHardware(slotIndices) {
+  if (!gattServer || !gattServer.connected) return;
+  for (let i = 0; i < slotIndices.length; i++) {
+    const slotIdx = slotIndices[i];
+    const mask = NC3000_SLOT_MASKS[slotIdx];
+    try {
+      await sendBytes(buildNc3000StopFrame(mask), `[Dyno Stop Slot ${slotIdx + 1} (0xFE)]`);
+    } catch (_) {}
+    if (i < slotIndices.length - 1) {
+      await new Promise((r) => setTimeout(r, 90));
+    }
+  }
+}
+
+function cleanupDynoTimers() {
+  if (dynoState.tickTimer) {
+    clearInterval(dynoState.tickTimer);
+    dynoState.tickTimer = null;
+  }
+  if (dynoState.pendingWatchdog) {
+    clearTimeout(dynoState.pendingWatchdog);
+    dynoState.pendingWatchdog = null;
+  }
+}
+
+function finalizeDynoRun(abortedReason = null) {
+  cleanupDynoTimers();
+  const run = dynoState.activeRun;
+  dynoState.active = false;
+  dynoState.starting = false;
+  dynoState.cooldownUntil = Date.now() + 4000;
+  setTelemetryPollerRate(420);
+
+  if (run) {
+    run.abortedReason = abortedReason || null;
+    run.completedAt = new Date().toISOString();
+    run.slots.forEach((s) => {
+      s.metrics = computeDynoSlotMetrics(s, run.dur, run.targetCurrentMa, run.ratedMaxMa);
+      const t = slotTelemetry[s.slotIdx];
+      if (keeperState?.slots?.[s.slotIdx]) {
+        keeperState.slots[s.slotIdx].lastSyncedHwSig = t ? `${t.mode}:${t.chargerStatu}` : "1:3";
+      }
+      updateDynoSlotCardLive(s.slotIdx, t);
+    });
+
+    const hasValidData = run.slots.some((s) => (s.samples || []).length >= 3);
+    if (hasValidData) {
+      const saved = loadDynoSavedRuns().filter((r) => r.id !== run.id);
+      saved.unshift(run);
+      saveDynoRuns(saved);
+      dynoState.viewedRunId = run.id;
+      dynoState.rankingFilterKey = `${run.dur}_${run.targetCurrentMa}`;
+    } else {
+      dynoState.viewedRunId = run.id;
+    }
+  }
+
+  updateDynoProgressUI();
+  updateKeeperControlButtons();
+  renderDynoAll();
+}
+
+async function stopDynoTest(reason = "Stopped by user") {
+  clearDynoConfirmArm();
+  if (!dynoState.active && !dynoState.starting) return;
+  const testedIndices = (dynoState.activeRun?.slots || []).map((s) => s.slotIdx);
+  await stopAllDynoSlotsOnHardware(testedIndices);
+  finalizeDynoRun(reason);
+  appendLog("SYS", null, null, `[Motor Dyno] ${reason}.`);
+  showToast(`🛑 Motor Dyno ${reason.toLowerCase()}`, "warning");
+}
+
+function abortDynoOnDisconnect(reason = "BLE disconnected") {
+  clearDynoConfirmArm();
+  cleanupDynoTimers();
+  if (dynoState.activeRun) {
+    finalizeDynoRun(reason);
+  } else {
+    dynoState.active = false;
+    dynoState.starting = false;
+    setTelemetryPollerRate(420);
+    updateKeeperControlButtons();
+  }
+}
+
+async function startDynoTest() {
+  clearDynoConfirmArm();
+  if (!gattServer || !gattServer.connected) {
+    showToast("Please connect to your SkyRC NC3000 Pro first.", "warning");
+    return;
+  }
+  const selectedIndices = getDynoSelectedSlotIndices();
+  if (selectedIndices.length === 0) {
+    showToast("Select at least one slot before running the Motor Dyno.", "warning");
+    return;
+  }
+
+  // Filter to slots that actually report a battery if telemetry exists; if none have telemetry yet allow selected slots
+  const anyKnownTelemetry = selectedIndices.some((i) => slotTelemetry[i]?.updatedAt > 0);
+  const readyIndices = anyKnownTelemetry
+    ? selectedIndices.filter((i) => slotTelemetry[i]?.hasBattery)
+    : selectedIndices;
+
+  if (readyIndices.length === 0) {
+    showToast("No batteries detected in the selected slots.", "warning");
+    return;
+  }
+
+  // State isolation (#4): stop Race Ready Keeper if currently active
+  dynoState.starting = true;
+  if (keeperState.active) {
+    await stopAutoKeeper(true);
+    await new Promise((r) => setTimeout(r, 200));
+  }
+
+  // Pre-clean slots that are actively charging/trickle/error
+  for (const idx of readyIndices) {
+    const t = slotTelemetry[idx];
+    if (t && (t.chargerStatu >= 2 || t.errorState > 0)) {
+      await sendBytes(buildNc3000StopFrame(NC3000_SLOT_MASKS[idx]), `[Dyno Pre-Clean Slot ${idx + 1} (0xFE)]`);
+      await new Promise((r) => setTimeout(r, 90));
+    }
+  }
+
+  const preset = getDynoPresetById(dynoState.presetId);
+  const currentInputEl = document.getElementById("dynoCurrentMa");
+  const targetCurrentMa = Math.max(
+    MIN_DYNO_CURRENT_MA,
+    Math.min(MAX_DYNO_CURRENT_MA, parseInt(currentInputEl?.value || dynoState.targetCurrentMa, 10) || 2500)
+  );
+  dynoState.targetCurrentMa = targetCurrentMa;
+  const noteVal = String(document.getElementById("dynoRunNote")?.value || dynoState.note || "").trim();
+  dynoState.note = noteVal;
+  saveDynoPrefs();
+
+  const now = Date.now();
+  const runId = `dyno_${now}`;
+  const slotRuns = readyIndices.map((slotIdx) => {
+    const t = slotTelemetry[slotIdx];
+    const customName = String(document.getElementById(`dynoCellName-${slotIdx}`)?.value || dynoState.cellNames[slotIdx] || "").trim();
+    return {
+      slotIdx,
+      cellName: customName || `Slot ${slotIdx + 1}`,
+      v0: t?.hasBattery ? +(t.voltageMv / 1000).toFixed(3) : null,
+      trickleStart: Boolean(t?.chargerStatu === 2),
+      started: false,
+      startedAtMs: 0,
+      finished: false,
+      earlyCutoff: false,
+      thermalFault: false,
+      errorState: 0,
+      elapsedSec: 0,
+      samples: [],
+      metrics: null
+    };
+  });
+
+  dynoState.activeRun = {
+    id: runId,
+    createdAt: new Date(now).toISOString(),
+    presetId: preset.id,
+    presetLabel: preset.label,
+    ratedMaxMa: preset.ratedMaxMa || null,
+    targetCurrentMa,
+    dur: dynoState.dur,
+    note: noteVal,
+    abortedReason: null,
+    slots: slotRuns
+  };
+  dynoState.viewedRunId = runId;
+  dynoState.active = true;
+  dynoState.starting = false;
+  dynoState.startTimeMs = now;
+  dynoState.lastAnyTelemetryMs = now;
+
+  // Boost telemetry poller to 250ms (1.0s 4-slot sweep) during active Dyno run (#3)
+  setTelemetryPollerRate(250);
+  startTelemetryPoller();
+  updateKeeperControlButtons();
+  updateDynoProgressUI();
+  renderDynoSvgChart(dynoState.activeRun);
+
+  // Send 0x94 Mode 1 Discharge frame with outStopCurrentMa = targetCurrentMa to each ready slot
+  for (let i = 0; i < readyIndices.length; i++) {
+    const slotIdx = readyIndices[i];
+    const mask = NC3000_SLOT_MASKS[slotIdx];
+    const frame = buildDynoDischargeFrame(mask, targetCurrentMa);
+    await sendBytes(frame, `[Start Dyno Mode 1 (${targetCurrentMa}mA) Slot ${slotIdx + 1}]`);
+    if (i < readyIndices.length - 1) {
+      await new Promise((r) => setTimeout(r, 120));
+    }
+  }
+
+  appendLog("SYS", null, null, `[Motor Dyno] Started ${preset.label} (${targetCurrentMa} mA × ${dynoState.dur}s) on ${readyIndices.length} slot(s).`);
+
+  // 1s tick monitor for BLE gap guard (>4.5s) and live timer UI (#3)
+  dynoState.tickTimer = setInterval(() => {
+    if (!dynoState.active || !dynoState.activeRun) return;
+    if (Date.now() - dynoState.lastAnyTelemetryMs > 4500) {
+      stopDynoTest("BLE telemetry gap exceeded 4.5s");
+      return;
+    }
+    updateDynoProgressUI();
+  }, 500);
+
+  // Pending-start watchdog (~6.5s)
+  dynoState.pendingWatchdog = setTimeout(() => {
+    if (!dynoState.active || !dynoState.activeRun) return;
+    const anyStarted = dynoState.activeRun.slots.some((s) => s.started);
+    if (!anyStarted) {
+      stopDynoTest("Slots failed to enter Mode 1 discharge within 6.5s");
+    }
+  }, 6500);
+}
+
+function ingestDynoSlotTelemetry(info) {
+  if (!info || info.slotIdx < 0 || info.slotIdx >= 4) return;
+  updateDynoSlotCardLive(info.slotIdx, info);
+
+  if (!dynoState.active || !dynoState.activeRun) return;
+
+  const run = dynoState.activeRun;
+  const slotRun = run.slots.find((s) => s.slotIdx === info.slotIdx);
+  if (!slotRun || slotRun.finished) return;
+
+  const now = info.updatedAt || Date.now();
+  dynoState.lastAnyTelemetryMs = now;
+
+  // Detect hardware error (including errorState === 6 thermal fault)
+  if (info.errorState > 0) {
+    slotRun.finished = true;
+    slotRun.earlyCutoff = true;
+    slotRun.errorState = info.errorState;
+    slotRun.thermalFault = info.errorState === 6;
+    slotRun.metrics = computeDynoSlotMetrics(slotRun, run.dur, run.targetCurrentMa, run.ratedMaxMa);
+    updateDynoSlotCardLive(info.slotIdx, info);
+  } else {
+    const isDischargingNow = info.chargerStatu === 3 || (info.mode === 1 && info.currentMa >= 100);
+    if (!slotRun.started) {
+      if (!isDischargingNow) {
+        updateDynoSlotCardLive(info.slotIdx, info);
+        return;
+      }
+      slotRun.started = true;
+      slotRun.startedAtMs = now;
+    }
+
+    // Early hardware termination after load already began
+    if (slotRun.started && !isDischargingNow && info.chargerStatu >= 5 && slotRun.samples.length > 0) {
+      slotRun.finished = true;
+      slotRun.earlyCutoff = true;
+      slotRun.metrics = computeDynoSlotMetrics(slotRun, run.dur, run.targetCurrentMa, run.ratedMaxMa);
+      updateDynoSlotCardLive(info.slotIdx, info);
+    } else {
+      const rawWallSec = (now - slotRun.startedAtMs) / 1000;
+      const tSec = +Math.max(rawWallSec, info.durationSec || 0).toFixed(2);
+      const v = +(info.voltageMv / 1000).toFixed(4);
+      const sample = {
+        t: tSec,
+        v,
+        i: info.currentMa,
+        mAh: info.capacityMah,
+        ir: info.irMohm
+      };
+      slotRun.samples.push(sample);
+      slotRun.elapsedSec = tSec;
+      slotRun.metrics = computeDynoSlotMetrics(slotRun, run.dur, run.targetCurrentMa, run.ratedMaxMa);
+
+      if (tSec >= run.dur) {
+        slotRun.finished = true;
+      }
+      updateDynoSlotCardLive(info.slotIdx, info);
+    }
+  }
+
+  updateDynoProgressUI();
+  renderDynoSvgChart(run);
+  renderDynoResultsTable(run);
+
+  // Complete run when every participating slot has finished
+  if (run.slots.every((s) => s.finished)) {
+    const testedIndices = run.slots.map((s) => s.slotIdx);
+    stopAllDynoSlotsOnHardware(testedIndices).catch(() => {});
+    finalizeDynoRun(null);
+    appendLog("SYS", null, null, `[Motor Dyno] Completed ${run.presetLabel} (${run.targetCurrentMa} mA × ${run.dur}s).`);
+    showToast(`🏁 Motor Dyno test completed (${run.dur}s @ ${run.targetCurrentMa} mA)`, "success");
+  }
+}
+
+function exportDynoCsv() {
+  const run = getViewedDynoRun();
+  if (!run) {
+    showToast("No dyno run selected to export.", "warning");
+    return;
+  }
+  const rows = [];
+  rows.push(["Run_ID", "Timestamp_ISO", "Preset", "Target_mA", "Duration_Sec", "Note", "Slot", "Cell_Name", "V0_Rest", "Trickle_Start", "Sample_Sec", "Voltage_V", "Current_mA", "Capacity_mAh", "IR_mOhm", "Score_V", "Punch_mV", "V10_V", "Vend_V", "Est_Peak_V"].join(","));
+  (run.slots || []).forEach((s) => {
+    const m = s.metrics || computeDynoSlotMetrics(s, run.dur, run.targetCurrentMa, run.ratedMaxMa);
+    const base = [
+      `"${run.id}"`,
+      `"${run.createdAt || ""}"`,
+      `"${(run.presetLabel || "").replace(/"/g, '""')}"`,
+      run.targetCurrentMa,
+      run.dur,
+      `"${(run.note || "").replace(/"/g, '""')}"`,
+      s.slotIdx + 1,
+      `"${(s.cellName || "").replace(/"/g, '""')}"`,
+      s.v0 ?? "",
+      s.trickleStart ? "1" : "0"
+    ];
+    const tail = [
+      m.score ?? "",
+      m.punchDrop != null ? Math.round(m.punchDrop * 1000) : "",
+      m.v10 ?? "",
+      m.vEnd ?? "",
+      m.estPeakLoadV ?? ""
+    ];
+    if ((s.samples || []).length === 0) {
+      rows.push([...base, "", "", "", "", "", ...tail].join(","));
+    } else {
+      s.samples.forEach((pt) => {
+        rows.push([...base, pt.t, pt.v, pt.i, pt.mAh ?? "", pt.ir ?? "", ...tail].join(","));
+      });
+    }
+  });
+  const blob = new Blob([rows.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  downloadBlob(blob, `nc3000-dyno-${run.id}.csv`);
+  showToast("✅ Exported Dyno run CSV");
+}
+
+function exportDynoJson() {
+  const runs = loadDynoSavedRuns();
+  if (runs.length === 0) {
+    showToast("No saved dyno runs to export.", "warning");
+    return;
+  }
+  const payload = { exportedAt: new Date().toISOString(), version: APP_VERSION, runs };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  downloadBlob(blob, `nc3000-dyno-history-${Date.now()}.json`);
+  showToast(`✅ Exported ${runs.length} dyno run(s)`);
+}
+
+function initBatteryDyno() {
+  loadDynoPrefs();
+  populateDynoPresetSelect();
+
+  const curInput = document.getElementById("dynoCurrentMa");
+  if (curInput) curInput.value = String(dynoState.targetCurrentMa);
+
+  const noteInput = document.getElementById("dynoRunNote");
+  if (noteInput) {
+    noteInput.value = dynoState.note || "";
+    noteInput.addEventListener("input", (e) => {
+      dynoState.note = e.target.value;
+      saveDynoPrefs();
+    });
+  }
+
+  setDynoDuration(dynoState.dur);
+  setDynoSelectedSlots(dynoState.selectedSlots);
+
+  for (let i = 0; i < 4; i++) {
+    const nameInput = document.getElementById(`dynoCellName-${i}`);
+    if (nameInput) {
+      nameInput.value = dynoState.cellNames[i] || "";
+      nameInput.addEventListener("input", (e) => {
+        dynoState.cellNames[i] = e.target.value;
+        saveDynoPrefs();
+      });
+    }
+    const chk = document.getElementById(`dynoSlotChk-${i}`);
+    if (chk) {
+      chk.addEventListener("change", (e) => {
+        dynoState.selectedSlots[i] = Boolean(e.target.checked);
+        const card = document.getElementById(`dynoSlotCard-${i}`);
+        if (card) card.classList.toggle("unchecked", !dynoState.selectedSlots[i]);
+        saveDynoPrefs();
+        updateDynoControlButtons();
+      });
+    }
+  }
+
+  const unnamedChk = document.getElementById("dynoIncludeUnnamedChk");
+  if (unnamedChk) {
+    unnamedChk.checked = dynoState.includeUnnamedInRanking;
+    unnamedChk.addEventListener("change", (e) => {
+      dynoState.includeUnnamedInRanking = Boolean(e.target.checked);
+      saveDynoPrefs();
+      renderDynoRankingAndPairs();
+    });
+  }
+
+  document.getElementById("dynoMotorPreset")?.addEventListener("change", (e) => {
+    handleDynoPresetChange(e.target.value);
+  });
+
+  document.getElementById("dynoCurrentMa")?.addEventListener("input", (e) => {
+    handleDynoCurrentInput(e.target.value);
+  });
+
+  document.getElementById("dynoDurationPills")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".dyno-dur-btn");
+    if (!btn) return;
+    setDynoDuration(btn.getAttribute("data-dyno-dur"));
+  });
+
+  document.getElementById("btnDynoQuickPair1")?.addEventListener("click", () => setDynoSelectedSlots([true, true, false, false]));
+  document.getElementById("btnDynoQuickPair2")?.addEventListener("click", () => setDynoSelectedSlots([false, false, true, true]));
+  document.getElementById("btnDynoSelectPair1")?.addEventListener("click", () => setDynoSelectedSlots([true, true, false, false]));
+  document.getElementById("btnDynoSelectPair2")?.addEventListener("click", () => setDynoSelectedSlots([false, false, true, true]));
+  document.getElementById("btnDynoSelectAll")?.addEventListener("click", () => setDynoSelectedSlots([true, true, true, true]));
+
+  // Two-tap Run Test confirmation (3.0s window)
+  document.getElementById("btnDynoRun")?.addEventListener("click", () => {
+    const now = Date.now();
+    if (dynoState.confirmArmedUntil > now) {
+      startDynoTest();
+    } else {
+      dynoState.confirmArmedUntil = now + 3000;
+      if (dynoState.confirmTimer) clearInterval(dynoState.confirmTimer);
+      dynoState.confirmTimer = setInterval(() => {
+        if (Date.now() >= dynoState.confirmArmedUntil) {
+          clearDynoConfirmArm();
+        } else {
+          updateDynoControlButtons();
+        }
+      }, 250);
+      updateDynoControlButtons();
+    }
+  });
+
+  document.getElementById("btnDynoStop")?.addEventListener("click", () => {
+    stopDynoTest("Aborted by user");
+  });
+
+  document.getElementById("dynoRankingFilterPills")?.addEventListener("click", (e) => {
+    const btn = e.target.closest(".dyno-filter-pill");
+    if (!btn) return;
+    dynoState.rankingFilterKey = btn.getAttribute("data-dyno-filter");
+    renderDynoRankingAndPairs();
+  });
+
+  document.getElementById("dynoHistoryList")?.addEventListener("click", async (e) => {
+    const delBtn = e.target.closest(".dyno-delete-run-btn");
+    if (delBtn) {
+      e.stopPropagation();
+      const delId = delBtn.getAttribute("data-dyno-delete-id");
+      const next = loadDynoSavedRuns().filter((r) => r.id !== delId);
+      saveDynoRuns(next);
+      if (dynoState.viewedRunId === delId) dynoState.viewedRunId = next[0]?.id || null;
+      renderDynoAll();
+      return;
+    }
+    const item = e.target.closest(".dyno-history-item");
+    if (item) {
+      dynoState.viewedRunId = item.getAttribute("data-dyno-run-id");
+      renderDynoAll();
+    }
+  });
+
+  document.getElementById("btnDynoClearHistory")?.addEventListener("click", async () => {
+    const ok = await showConfirmModal("🗑️ Clear All Dyno Runs?", "Delete all saved Battery Test / Motor Dyno runs from local storage?");
+    if (!ok) return;
+    saveDynoRuns([]);
+    dynoState.viewedRunId = null;
+    dynoState.rankingFilterKey = null;
+    renderDynoAll();
+    showToast("Cleared saved Motor Dyno history");
+  });
+
+  document.getElementById("btnDynoExportCsv")?.addEventListener("click", exportDynoCsv);
+  document.getElementById("btnDynoExportJson")?.addEventListener("click", exportDynoJson);
+  document.getElementById("btnDynoImportJson")?.addEventListener("click", () => {
+    document.getElementById("dynoImportFileInput")?.click();
+  });
+  document.getElementById("dynoImportFileInput")?.addEventListener("change", (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result || "{}"));
+        const imported = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.runs) ? parsed.runs : []);
+        if (imported.length === 0) {
+          showToast("No dyno runs found in imported JSON.", "warning");
+          return;
+        }
+        const existing = loadDynoSavedRuns();
+        const byId = new Map(existing.map((r) => [r.id, r]));
+        imported.forEach((r) => {
+          if (r && r.id && Array.isArray(r.slots)) byId.set(r.id, r);
+        });
+        const merged = Array.from(byId.values()).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+        saveDynoRuns(merged);
+        dynoState.viewedRunId = merged[0]?.id || null;
+        renderDynoAll();
+        showToast(`✅ Imported ${imported.length} dyno run(s)`, "success");
+      } catch (err) {
+        showToast(`Failed to import JSON: ${err.message}`, "error");
+      } finally {
+        e.target.value = "";
+      }
+    };
+    reader.readAsText(file);
+  });
+
+  renderDynoAll();
+}
+
 // Startup Environment Check
 window.addEventListener("DOMContentLoaded", () => {
   if (IS_LOCALHOST) {
@@ -5490,9 +6995,10 @@ window.addEventListener("DOMContentLoaded", () => {
   if (siteVer) siteVer.textContent = APP_VERSION;
   console.log(`[SkyRC NC3000 Pro UI] Version ${APP_VERSION} (Build ${APP_BUILD_DATE}) initialized.`);
 
-  // Initialize Hardware System Settings & Telemetry Charting
+  // Initialize Hardware System Settings, Telemetry Charting & Motor Dyno
   loadHwSettingsPrefs();
   initTelemetryChart();
+  initBatteryDyno();
 
   // App Tab Navigation
   document.querySelectorAll(".tab-nav-btn").forEach((btn) => {
@@ -5667,3 +7173,17 @@ window.sendHwSettingsToCharger = sendHwSettingsToCharger;
 window.queryHwSettingsFromCharger = queryHwSettingsFromCharger;
 window.factoryResetHw = factoryResetHw;
 window.changeHwPin = changeHwPin;
+window.TAMIYA_MOTOR_PRESETS = TAMIYA_MOTOR_PRESETS;
+window.dynoState = dynoState;
+window.isDynoSessionActive = isDynoSessionActive;
+window.buildDynoDischargeFrame = buildDynoDischargeFrame;
+window.interpolateDynoVoltageAt = interpolateDynoVoltageAt;
+window.computeDynoSlotMetrics = computeDynoSlotMetrics;
+window.computeBestPairs = computeBestPairs;
+window.startDynoTest = startDynoTest;
+window.stopDynoTest = stopDynoTest;
+window.ingestDynoSlotTelemetry = ingestDynoSlotTelemetry;
+window.finalizeDynoRun = finalizeDynoRun;
+window.loadDynoSavedRuns = loadDynoSavedRuns;
+window.saveDynoRuns = saveDynoRuns;
+window.renderDynoAll = renderDynoAll;
