@@ -104,10 +104,10 @@ def test_battery_dyno():
                 note: 'NeoChamp Batch A @ 25C Pit',
                 abortedReason: null,
                 slots: [
-                    { slotIdx: 0, cellName: 'NC-A1', v0: 1.485, trickleStart: true, started: false, startedAtMs: 0, finished: false, earlyCutoff: false, thermalFault: false, errorState: 0, elapsedSec: 0, samples: [], metrics: null },
+                    { slotIdx: 0, cellName: 'NC-A1', v0: 1.432, trickleStart: false, started: false, startedAtMs: 0, finished: false, earlyCutoff: false, thermalFault: false, errorState: 0, elapsedSec: 0, samples: [], metrics: null },
                     { slotIdx: 1, cellName: 'NC-A2', v0: 1.430, trickleStart: false, started: false, startedAtMs: 0, finished: false, earlyCutoff: false, thermalFault: false, errorState: 0, elapsedSec: 0, samples: [], metrics: null },
                     { slotIdx: 2, cellName: 'NC-B1', v0: 1.428, trickleStart: false, started: false, startedAtMs: 0, finished: false, earlyCutoff: false, thermalFault: false, errorState: 0, elapsedSec: 0, samples: [], metrics: null },
-                    { slotIdx: 3, cellName: 'NC-B2', v0: 1.425, trickleStart: false, started: false, startedAtMs: 0, finished: false, earlyCutoff: false, thermalFault: false, errorState: 0, elapsedSec: 0, samples: [], metrics: null }
+                    { slotIdx: 3, cellName: 'NC-B2', v0: 1.485, trickleStart: true, started: false, startedAtMs: 0, finished: false, earlyCutoff: false, thermalFault: false, errorState: 0, elapsedSec: 0, samples: [], metrics: null }
                 ]
             };
         }""")
@@ -156,6 +156,8 @@ def test_battery_dyno():
         assert m0["irMohm"] == 18, f"Expected post-5s median IR=18 mOhm, got {m0['irMohm']}"
         assert m0["estPeakLoadV"] is not None and m0["estPeakLoadV"] < m0["score"], "Clamped Mach-Dash PRO must project lower Est. V @ 3500 mA Peak"
         assert m0["punchDrop"] is not None and m0["punchDrop"] > 0.1, "Punch Drop (1s) must capture V0 -> V(2s) drop"
+        assert m0["avgDropMv"] is not None and m0["avgDropMv"] > 100 and m0["sustainedPct"] is not None
+        assert abs((m0["rawScore"] + (1.420 - 1.432)) - m0["normScore"]) < 0.001, "normScore must offset rawScore by (1.420 - V0)"
 
         # Check rendered warnings & Est V @ Peak column & Trickle tag in DOM
         warnings_html = page.inner_html("#dynoRunWarnings")
@@ -221,6 +223,37 @@ def test_battery_dyno():
         assert dur10_metrics["estPeakLoadV"] is None, "No Est. Peak projection when ratedMaxMa <= target/max"
         print("[PASS] dur=10s Punch Drop & lateSag=null verified")
 
+        print("\n--- TEST 5B: V0 Normalization Equivalence & Lower-Drop Superiority ---")
+        norm_cmp = page.evaluate("""() => {
+            const makeCell = (name, v0, loadV) => ({
+                slotIdx: 0, cellName: name, v0,
+                samples: [
+                    { t: 2.0, v: loadV, i: 2500, ir: 18 },
+                    { t: 10.0, v: loadV, i: 2500, ir: 18 },
+                    { t: 25.0, v: loadV, i: 2500, ir: 18 },
+                    { t: 45.0, v: loadV, i: 2500, ir: 18 }
+                ]
+            });
+            const mHigh = window.computeDynoSlotMetrics(makeCell('HighV0', 1.460, 1.340), 45, 2500, null, true);
+            const mLow = window.computeDynoSlotMetrics(makeCell('LowV0', 1.380, 1.260), 45, 2500, null, true);
+            const mBetterHold = window.computeDynoSlotMetrics(makeCell('BetterHold', 1.360, 1.270), 45, 2500, null, true);
+            const mWorseDrop = window.computeDynoSlotMetrics(makeCell('WorseDrop', 1.460, 1.320), 45, 2500, null, true);
+            return { mHigh, mLow, mBetterHold, mWorseDrop };
+        }""")
+        assert norm_cmp["mHigh"]["avgDropMv"] == 120 and norm_cmp["mLow"]["avgDropMv"] == 120
+        assert abs(norm_cmp["mHigh"]["normScore"] - 1.3000) < 0.0002
+        assert abs(norm_cmp["mLow"]["normScore"] - 1.3000) < 0.0002
+        assert norm_cmp["mBetterHold"]["normScore"] > norm_cmp["mWorseDrop"]["normScore"], (
+            "Cell with smaller load drop (-90 mV from 1.36V) must outscore cell with larger drop (-140 mV from 1.46V)"
+        )
+        # Verify UI checkbox toggles Results Table & Header dynamically between Normalized and Raw Score
+        assert "Norm Score" in page.text_content("#thDynoScore")
+        page.uncheck("#dynoNormalizeV0Chk")
+        assert page.text_content("#thDynoScore") == "Score (Avg V)"
+        page.check("#dynoNormalizeV0Chk")
+        assert "Norm Score" in page.text_content("#thDynoScore")
+        print("[PASS] V0-normalized drop equivalence & UI toggle verified")
+
         print("\n--- TEST 6: Best-Pair Recommender Partitioning & Latest-Cell Deduplication ---")
         pair_check = page.evaluate("""() => {
             const runs = window.loadDynoSavedRuns();
@@ -254,7 +287,31 @@ def test_battery_dyno():
         assert "NC-A1" in pair_check["firstPairText"] and "NC-A2" in pair_check["firstPairText"], (
             f"Best pair must match NC-A1 + NC-A2, got: {pair_check['firstPairText']}"
         )
-        print("[PASS] Pair Recommender & (dur, targetCurrentMa) partitioning verified")
+
+        export_check = page.evaluate("""() => {
+            const report = window.buildDynoLeaderboardReportData();
+            const csv = window.buildDynoLeaderboardCsvString(report);
+            const html = window.buildDynoLeaderboardHtmlString(report);
+            return {
+                hasCsvBtn: !!document.getElementById('btnDynoExportLeaderboardCsv'),
+                hasHtmlBtn: !!document.getElementById('btnDynoExportLeaderboardHtml'),
+                cellNames: report.poolCells.map((c) => c.cellName),
+                bestPair: report.displayPairs[0] ? `${report.displayPairs[0].cellA.cellName} + ${report.displayPairs[0].cellB.cellName}` : '',
+                csv,
+                html
+            };
+        }""")
+        assert export_check["hasCsvBtn"] and export_check["hasHtmlBtn"], "Leaderboard export buttons must exist"
+        assert set(export_check["cellNames"]) == {"NC-A1", "NC-A2", "NC-B1", "NC-B2"}
+        assert export_check["bestPair"] == "NC-A1 + NC-A2", f"Expected NC-A1 + NC-A2, got {export_check['bestPair']}"
+        assert "Rank,Cell_Name,Motor_Preset" in export_check["csv"]
+        assert "Pair_Rank,Pair_Type,Cell_A,Cell_B" in export_check["csv"]
+        assert "NC-A1" in export_check["csv"] and "NC-A2" in export_check["csv"]
+        assert "Best Race Pair" in export_check["html"]
+        assert "NC-A1 + NC-A2" in export_check["html"]
+        for cname in ("NC-A1", "NC-A2", "NC-B1", "NC-B2"):
+            assert cname in export_check["html"], f"Missing {cname} in exported HTML report"
+        print("[PASS] Pair Recommender, partitioning & Leaderboard/Pair CSV+HTML exports verified")
 
         # Cleanup localStorage so subsequent suites start clean
         page.evaluate("() => localStorage.removeItem('nc3000_battery_tests_v1')")

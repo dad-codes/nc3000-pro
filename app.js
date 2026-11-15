@@ -5473,6 +5473,7 @@ async function changeHwPin() {
 
 const MIN_DYNO_CURRENT_MA = 200;
 const MAX_DYNO_CURRENT_MA = 2500;
+const DYNO_NORM_REF_V = 1.420;
 const DYNO_STORAGE_KEY = "nc3000_battery_tests_v1";
 const DYNO_PREFS_KEY = "nc3000_dyno_prefs_v1";
 const DYNO_CHECKPOINTS = [10, 20, 30, 40, 45, 60, 90, 120, 180];
@@ -5520,7 +5521,8 @@ const dynoState = {
   activeRun: null,
   viewedRunId: null,
   rankingFilterKey: null,
-  includeUnnamedInRanking: false
+  includeUnnamedInRanking: false,
+  normalizeV0: true
 };
 
 function escapeHtmlStr(str) {
@@ -5589,6 +5591,9 @@ function loadDynoPrefs() {
     if (typeof p.includeUnnamedInRanking === "boolean") {
       dynoState.includeUnnamedInRanking = p.includeUnnamedInRanking;
     }
+    if (typeof p.normalizeV0 === "boolean") {
+      dynoState.normalizeV0 = p.normalizeV0;
+    }
   } catch (_) {}
 }
 
@@ -5601,7 +5606,8 @@ function saveDynoPrefs() {
       note: dynoState.note,
       selectedSlots: dynoState.selectedSlots,
       cellNames: dynoState.cellNames,
-      includeUnnamedInRanking: dynoState.includeUnnamedInRanking
+      includeUnnamedInRanking: dynoState.includeUnnamedInRanking,
+      normalizeV0: dynoState.normalizeV0
     }));
   } catch (_) {}
 }
@@ -5689,14 +5695,23 @@ function computeMedian(nums) {
   return sorted.length % 2 !== 0 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
 }
 
-function computeDynoSlotMetrics(slotRun, dur, targetCurrentMa, ratedMaxMa) {
+function computeDynoSlotMetrics(slotRun, dur, targetCurrentMa, ratedMaxMa, useNorm = dynoState.normalizeV0) {
   const samples = [...(slotRun.samples || [])].sort((a, b) => a.t - b.t);
   const windowSamples = samples.filter((s) => s.t >= 0.5 && s.t <= dur + 0.5);
   const loadedAll = samples.filter((s) => s.t >= 0.5);
 
-  const score = windowSamples.length >= 3
+  const hasV0 = typeof slotRun.v0 === "number" && !Number.isNaN(slotRun.v0) && slotRun.v0 > 0;
+  const normOffset = hasV0 ? (DYNO_NORM_REF_V - slotRun.v0) : 0;
+
+  const rawScore = windowSamples.length >= 3
     ? +(windowSamples.reduce((acc, s) => acc + s.v, 0) / windowSamples.length).toFixed(4)
     : null;
+  const avgDrop = (hasV0 && rawScore != null) ? +(slotRun.v0 - rawScore).toFixed(4) : null;
+  const avgDropMv = avgDrop != null ? Math.round(avgDrop * 1000) : null;
+  const sustainedPct = (hasV0 && rawScore != null) ? +((rawScore / slotRun.v0) * 100).toFixed(1) : null;
+  const normScore = (hasV0 && rawScore != null) ? +(rawScore + normOffset).toFixed(4) : rawScore;
+  const score = useNorm ? normScore : rawScore;
+
   const iAvg = windowSamples.length >= 1
     ? Math.round(windowSamples.reduce((acc, s) => acc + (s.i || 0), 0) / windowSamples.length)
     : null;
@@ -5708,20 +5723,30 @@ function computeDynoSlotMetrics(slotRun, dur, targetCurrentMa, ratedMaxMa) {
   }
 
   const v1sSample = samples.find((s) => s.t >= 1.0) || samples.find((s) => s.t >= 0.3) || null;
-  const punchDrop = (slotRun.v0 != null && v1sSample)
+  const punchDrop = (hasV0 && v1sSample)
     ? +(slotRun.v0 - v1sSample.v).toFixed(3)
     : null;
 
+  const rawCheckpoints = {};
   const checkpoints = {};
   DYNO_CHECKPOINTS.forEach((sec) => {
-    checkpoints[sec] = interpolateDynoVoltageAt(samples, sec);
+    const rawV = interpolateDynoVoltageAt(samples, sec);
+    rawCheckpoints[sec] = rawV;
+    checkpoints[sec] = (useNorm && hasV0 && rawV != null) ? +(rawV + normOffset).toFixed(4) : rawV;
   });
-  checkpoints[dur] = interpolateDynoVoltageAt(samples, dur);
+  const rawDurV = interpolateDynoVoltageAt(samples, dur);
+  rawCheckpoints[dur] = rawDurV;
+  checkpoints[dur] = (useNorm && hasV0 && rawDurV != null) ? +(rawDurV + normOffset).toFixed(4) : rawDurV;
 
-  const v10 = checkpoints[10] ?? null;
-  const vEnd = checkpoints[dur] ?? null;
-  const lateSag = (dur > 10 && v10 != null && vEnd != null)
-    ? +(v10 - vEnd).toFixed(3)
+  const rawV10 = rawCheckpoints[10] ?? null;
+  const rawVEnd = rawCheckpoints[dur] ?? null;
+  const normV10 = (hasV0 && rawV10 != null) ? +(rawV10 + normOffset).toFixed(4) : rawV10;
+  const normVEnd = (hasV0 && rawVEnd != null) ? +(rawVEnd + normOffset).toFixed(4) : rawVEnd;
+  const v10 = useNorm ? normV10 : rawV10;
+  const vEnd = useNorm ? normVEnd : rawVEnd;
+  const totalDrop = (hasV0 && rawVEnd != null) ? +(slotRun.v0 - rawVEnd).toFixed(3) : null;
+  const lateSag = (dur > 10 && rawV10 != null && rawVEnd != null)
+    ? +(rawV10 - rawVEnd).toFixed(3)
     : null;
 
   // Firmware computes IR only after load current engages (0x080077DE); use median non-zero IR after 5s
@@ -5741,6 +5766,12 @@ function computeDynoSlotMetrics(slotRun, dur, targetCurrentMa, ratedMaxMa) {
 
   return {
     score,
+    rawScore,
+    normScore,
+    avgDrop,
+    avgDropMv,
+    sustainedPct,
+    totalDrop,
     iAvg,
     currentThrottled,
     vMin,
@@ -5748,6 +5779,10 @@ function computeDynoSlotMetrics(slotRun, dur, targetCurrentMa, ratedMaxMa) {
     punchDrop,
     v10,
     vEnd,
+    rawV10,
+    rawVEnd,
+    normV10,
+    normVEnd,
     lateSag,
     checkpoints,
     irMohm,
@@ -5978,8 +6013,9 @@ function renderDynoSvgChart(run) {
   }
 
   const dur = run.dur || 45;
+  const useNorm = Boolean(dynoState.normalizeV0);
   if (titleEl) {
-    titleEl.textContent = `${run.presetLabel || "Custom"} — ${run.targetCurrentMa} mA × ${dur}s`;
+    titleEl.textContent = `${run.presetLabel || "Custom"} — ${run.targetCurrentMa} mA × ${dur}s${useNorm ? ` (V0-Normalized to ${DYNO_NORM_REF_V.toFixed(3)}V)` : ""}`;
   }
   if (subEl) {
     const ts = run.createdAt ? new Date(run.createdAt).toLocaleString() : "In progress…";
@@ -6011,14 +6047,16 @@ function renderDynoSvgChart(run) {
     warnWrap.innerHTML = badges.join("");
   }
 
-  // Determine Y-axis bounds across all samples
+  // Determine Y-axis bounds across all samples (accounting for V0 normalization if enabled)
   let minV = 1.0;
   let maxV = 1.5;
   const allVs = [];
   run.slots.forEach((s) => {
-    if (typeof s.v0 === "number") allVs.push(s.v0);
+    const hasV0 = typeof s.v0 === "number" && !Number.isNaN(s.v0);
+    const offset = (useNorm && hasV0) ? (DYNO_NORM_REF_V - s.v0) : 0;
+    if (hasV0) allVs.push(useNorm ? DYNO_NORM_REF_V : s.v0);
     (s.samples || []).forEach((pt) => {
-      if (typeof pt.v === "number") allVs.push(pt.v);
+      if (typeof pt.v === "number") allVs.push(pt.v + offset);
     });
   });
   if (allVs.length > 0) {
@@ -6063,22 +6101,27 @@ function renderDynoSvgChart(run) {
   const legendItems = [];
   run.slots.forEach((slotRun) => {
     const color = DYNO_SLOT_COLORS[slotRun.slotIdx % 4];
+    const hasV0 = typeof slotRun.v0 === "number" && !Number.isNaN(slotRun.v0);
+    const offset = (useNorm && hasV0) ? (DYNO_NORM_REF_V - slotRun.v0) : 0;
     const pts = [];
-    if (typeof slotRun.v0 === "number") {
-      pts.push(`${xOf(0).toFixed(1)},${yOf(slotRun.v0).toFixed(1)}`);
+    if (hasV0) {
+      pts.push(`${xOf(0).toFixed(1)},${yOf(useNorm ? DYNO_NORM_REF_V : slotRun.v0).toFixed(1)}`);
     }
     const sortedSamples = [...(slotRun.samples || [])].sort((a, b) => a.t - b.t);
     sortedSamples.forEach((s) => {
-      pts.push(`${xOf(s.t).toFixed(1)},${yOf(s.v).toFixed(1)}`);
+      pts.push(`${xOf(s.t).toFixed(1)},${yOf(s.v + offset).toFixed(1)}`);
     });
     if (pts.length >= 2) {
       svgParts.push(`<polyline fill="none" stroke="${color}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round" points="${pts.join(" ")}" />`);
     }
     sortedSamples.forEach((s) => {
-      svgParts.push(`<circle cx="${xOf(s.t).toFixed(1)}" cy="${yOf(s.v).toFixed(1)}" r="2.2" fill="${color}" />`);
+      svgParts.push(`<circle cx="${xOf(s.t).toFixed(1)}" cy="${yOf(s.v + offset).toFixed(1)}" r="2.2" fill="${color}" />`);
     });
     const labelName = slotRun.cellName || `Slot ${slotRun.slotIdx + 1}`;
-    const scoreStr = slotRun.metrics?.score != null ? `Score ${slotRun.metrics.score.toFixed(4)}V` : "Collecting…";
+    const m = computeDynoSlotMetrics(slotRun, dur, run.targetCurrentMa, run.ratedMaxMa);
+    const scoreStr = m.score != null
+      ? (useNorm && m.avgDropMv != null ? `${m.score.toFixed(4)}V (Δ -${m.avgDropMv}mV)` : `Score ${m.score.toFixed(4)}V`)
+      : "Collecting…";
     legendItems.push(`<span class="dyno-legend-item"><i class="dyno-legend-swatch" style="background:${color};"></i>${escapeHtmlStr(labelName)} (S${slotRun.slotIdx + 1}): ${scoreStr}</span>`);
   });
 
@@ -6089,37 +6132,43 @@ function renderDynoSvgChart(run) {
 function renderDynoResultsTable(run) {
   const tbody = document.getElementById("dynoResultsTbody");
   const metaEl = document.getElementById("dynoResultsMeta");
+  const thScore = document.getElementById("thDynoScore");
   const thVend = document.getElementById("thVend");
   const thEstPeakV = document.getElementById("thEstPeakV");
   const twoCellBar = document.getElementById("dynoTwoCellDeltaBar");
   if (!tbody) return;
+
+  const useNorm = Boolean(dynoState.normalizeV0);
+  if (thScore) thScore.textContent = useNorm ? `Norm Score (${DYNO_NORM_REF_V.toFixed(2)}V)` : "Score (Avg V)";
 
   if (!run || !Array.isArray(run.slots) || run.slots.length === 0) {
     if (metaEl) metaEl.textContent = "—";
     if (thVend) thVend.textContent = "V(end)";
     if (thEstPeakV) thEstPeakV.classList.add("hidden");
     if (twoCellBar) twoCellBar.classList.add("hidden");
-    tbody.innerHTML = `<tr><td colspan="12" class="dyno-table-empty">No run results loaded.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="13" class="dyno-table-empty">No run results loaded.</td></tr>`;
     return;
   }
 
   const dur = run.dur || 45;
-  if (thVend) thVend.textContent = `V(${dur}s)`;
+  if (thVend) thVend.textContent = useNorm ? `Norm V(${dur}s)` : `V(${dur}s)`;
 
+  const enriched = run.slots.map((s) => ({
+    ...s,
+    m: (s.samples && s.samples.length >= 3)
+      ? computeDynoSlotMetrics(s, dur, run.targetCurrentMa, run.ratedMaxMa)
+      : (s.metrics || computeDynoSlotMetrics(s, dur, run.targetCurrentMa, run.ratedMaxMa))
+  }));
   const showEstPeak = Boolean(
     (run.ratedMaxMa && run.ratedMaxMa > MAX_DYNO_CURRENT_MA && run.ratedMaxMa > run.targetCurrentMa)
-    || run.slots.some((s) => s.metrics?.estPeakLoadV != null)
+    || enriched.some((s) => s.m?.estPeakLoadV != null)
   );
   if (thEstPeakV) thEstPeakV.classList.toggle("hidden", !showEstPeak);
 
   if (metaEl) {
-    metaEl.textContent = `${run.presetLabel || "Custom"} • ${run.targetCurrentMa} mA • ${dur}s • ${run.slots.length} cell(s)${run.note ? ` • ${run.note}` : ""}`;
+    metaEl.textContent = `${run.presetLabel || "Custom"} • ${run.targetCurrentMa} mA • ${dur}s • ${run.slots.length} cell(s)${useNorm ? ` • V0 Normalized (${DYNO_NORM_REF_V.toFixed(3)}V Ref)` : " • Raw Unnormalized"}${run.note ? ` • ${run.note}` : ""}`;
   }
 
-  const enriched = run.slots.map((s) => ({
-    ...s,
-    m: s.metrics || computeDynoSlotMetrics(s, dur, run.targetCurrentMa, run.ratedMaxMa)
-  }));
   enriched.sort((a, b) => (b.m.score ?? -1) - (a.m.score ?? -1));
 
   // Two-cell quick delta bar
@@ -6153,10 +6202,18 @@ function renderDynoResultsTable(run) {
     if (s.thermalFault) tags.push(`<span class="dyno-cell-tag danger" title="80°C hardware thermal protection tripped">🔥 80°C</span>`);
     else if (s.earlyCutoff) tags.push(`<span class="dyno-cell-tag danger" title="Hit 1.00V hardware cutoff early">🛑 Cutoff</span>`);
 
+    const scoreSub = useNorm && m.rawScore != null && m.score !== m.rawScore
+      ? `<div style="font-size:10px;color:var(--text-2);font-weight:400;">Raw: ${m.rawScore.toFixed(3)}V</div>`
+      : "";
+    const dropCell = m.avgDropMv != null
+      ? `-${m.avgDropMv} mV${m.sustainedPct != null ? ` <span style="color:var(--text-2);font-size:10.5px;">(${m.sustainedPct}%)</span>` : ""}`
+      : "—";
+
     return `<tr class="mono">
       <td>#${idx + 1}</td>
       <td><span class="dyno-legend-swatch" style="background:${color};margin-right:6px;"></span><strong>${displayName}</strong> <span style="color:var(--text-2);">(S${s.slotIdx + 1})</span>${tags.join("")}</td>
-      <td class="dyno-score-hero">${m.score != null ? `${m.score.toFixed(4)} V` : "—"}</td>
+      <td class="dyno-score-hero">${m.score != null ? `${m.score.toFixed(4)} V` : "—"}${scoreSub}</td>
+      <td>${dropCell}</td>
       ${showEstPeak ? `<td>${m.estPeakLoadV != null ? `${m.estPeakLoadV.toFixed(4)} V` : "—"}</td>` : ""}
       <td>${s.v0 != null ? `${s.v0.toFixed(3)} V` : "—"}</td>
       <td>${m.punchDrop != null ? `${Math.round(m.punchDrop * 1000)} mV` : "—"}</td>
@@ -6172,12 +6229,8 @@ function renderDynoResultsTable(run) {
   tbody.innerHTML = rowsHtml.join("");
 }
 
-function renderDynoRankingAndPairs() {
-  const pillsEl = document.getElementById("dynoRankingFilterPills");
-  const recPanel = document.getElementById("dynoPairRecommenderPanel");
-  const rankTbody = document.getElementById("dynoRankingTbody");
-  if (!pillsEl || !rankTbody) return;
-
+function buildDynoLeaderboardReportData(filterKeyOverride = null) {
+  const useNorm = Boolean(dynoState.normalizeV0);
   const savedRuns = loadDynoSavedRuns();
   const comboMap = new Map();
   savedRuns.forEach((r) => {
@@ -6192,23 +6245,20 @@ function renderDynoRankingAndPairs() {
 
   const combos = Array.from(comboMap.values());
   if (combos.length === 0) {
-    pillsEl.innerHTML = "";
-    if (recPanel) recPanel.classList.add("hidden");
-    rankTbody.innerHTML = `<tr><td colspan="10" class="dyno-table-empty">Complete and save a dyno run to unlock leaderboard rankings and pair matching.</td></tr>`;
-    return;
+    return {
+      combos: [],
+      activeCombo: null,
+      useNorm,
+      poolCells: [],
+      topPairs: [],
+      disjointPairs: [],
+      displayPairs: []
+    };
   }
 
-  if (!dynoState.rankingFilterKey || !comboMap.has(dynoState.rankingFilterKey)) {
-    dynoState.rankingFilterKey = combos[0].key;
-  }
+  const desiredKey = filterKeyOverride || dynoState.rankingFilterKey;
+  const activeCombo = (desiredKey && comboMap.has(desiredKey)) ? comboMap.get(desiredKey) : combos[0];
 
-  pillsEl.innerHTML = combos.map((c) => `
-    <button type="button" class="dyno-filter-pill ${c.key === dynoState.rankingFilterKey ? "active" : ""}" data-dyno-filter="${c.key}">
-      ${escapeHtmlStr(c.label)} (${c.count})
-    </button>
-  `).join("");
-
-  const activeCombo = comboMap.get(dynoState.rankingFilterKey);
   // Deduplicate to latest run per unique named cell within this (dur, targetCurrentMa) pool
   const latestByCell = new Map();
   const matchingRuns = savedRuns.filter((r) => `${r.dur || 45}_${r.targetCurrentMa || 2500}` === activeCombo.key);
@@ -6216,7 +6266,9 @@ function renderDynoRankingAndPairs() {
 
   matchingRuns.forEach((run) => {
     (run.slots || []).forEach((slotRun) => {
-      const m = slotRun.metrics || computeDynoSlotMetrics(slotRun, run.dur, run.targetCurrentMa, run.ratedMaxMa);
+      const m = (slotRun.samples && slotRun.samples.length >= 3)
+        ? computeDynoSlotMetrics(slotRun, run.dur, run.targetCurrentMa, run.ratedMaxMa)
+        : (slotRun.metrics || computeDynoSlotMetrics(slotRun, run.dur, run.targetCurrentMa, run.ratedMaxMa));
       if (m.score == null) return;
       const rawName = String(slotRun.cellName || "").trim();
       const isGeneric = !rawName || /^slot\s*\d+$/i.test(rawName);
@@ -6224,13 +6276,31 @@ function renderDynoRankingAndPairs() {
 
       const cellKey = isGeneric ? `__unnamed_${run.id}_s${slotRun.slotIdx}` : rawName.toLowerCase();
       if (!latestByCell.has(cellKey)) {
+        const computedAvgDropMv = m.avgDropMv != null
+          ? m.avgDropMv
+          : (typeof slotRun.v0 === "number" && !Number.isNaN(slotRun.v0) && m.rawScore != null
+            ? Math.round((slotRun.v0 - m.rawScore) * 1000)
+            : null);
+        const computedSustainedPct = m.sustainedPct != null
+          ? m.sustainedPct
+          : (typeof slotRun.v0 === "number" && slotRun.v0 > 0 && m.rawScore != null
+            ? +((m.rawScore / slotRun.v0) * 100).toFixed(1)
+            : null);
         latestByCell.set(cellKey, {
+          rank: 0,
           cellKey,
           cellName: rawName || `Slot ${slotRun.slotIdx + 1}`,
           presetLabel: (run.presetLabel || "Custom").split(" — ")[0],
+          v0: typeof slotRun.v0 === "number" && !Number.isNaN(slotRun.v0) ? slotRun.v0 : null,
           score: m.score,
+          normScore: m.normScore != null ? m.normScore : null,
+          rawScore: m.rawScore != null ? m.rawScore : null,
+          avgDropMv: computedAvgDropMv,
+          sustainedPct: computedSustainedPct,
+          deltaLeaderMv: 0,
           punchDrop: m.punchDrop,
           lateSag: m.lateSag,
+          v10: m.v10 != null ? m.v10 : null,
           vEnd: m.vEnd,
           irMohm: m.irMohm,
           createdAt: run.createdAt
@@ -6240,20 +6310,65 @@ function renderDynoRankingAndPairs() {
   });
 
   const poolCells = Array.from(latestByCell.values()).sort((a, b) => b.score - a.score);
+  const leaderScore = poolCells.length > 0 ? poolCells[0].score : 0;
+  poolCells.forEach((cell, idx) => {
+    cell.rank = idx + 1;
+    cell.deltaLeaderMv = idx === 0 ? 0 : Math.round((cell.score - leaderScore) * 1000);
+  });
 
-  if (poolCells.length === 0) {
+  const { topPairs, disjointPairs } = computeBestPairs(poolCells);
+  let displayPairs = [];
+  if (poolCells.length >= 3) {
+    displayPairs = disjointPairs.concat(topPairs.filter((p) => !disjointPairs.includes(p))).slice(0, 4);
+  } else if (poolCells.length === 2) {
+    displayPairs = topPairs.slice(0, 1);
+  }
+
+  return {
+    combos,
+    activeCombo,
+    useNorm,
+    poolCells,
+    topPairs,
+    disjointPairs,
+    displayPairs
+  };
+}
+
+function renderDynoRankingAndPairs() {
+  const pillsEl = document.getElementById("dynoRankingFilterPills");
+  const recPanel = document.getElementById("dynoPairRecommenderPanel");
+  const rankTbody = document.getElementById("dynoRankingTbody");
+  const thRankScore = document.getElementById("thRankScore");
+  if (!pillsEl || !rankTbody) return;
+
+  const report = buildDynoLeaderboardReportData();
+  if (thRankScore) thRankScore.textContent = report.useNorm ? `Norm Score (${DYNO_NORM_REF_V.toFixed(2)}V)` : "Score (Avg V)";
+
+  if (report.combos.length === 0 || !report.activeCombo) {
+    pillsEl.innerHTML = "";
     if (recPanel) recPanel.classList.add("hidden");
-    rankTbody.innerHTML = `<tr><td colspan="10" class="dyno-table-empty">No named cells found for ${escapeHtmlStr(activeCombo.label)}. Name your cells or check "Include unnamed Slot N runs".</td></tr>`;
+    rankTbody.innerHTML = `<tr><td colspan="11" class="dyno-table-empty">Complete and save a dyno run to unlock leaderboard rankings and pair matching.</td></tr>`;
     return;
   }
 
-  // Best-Pair Recommender (hidden when < 2 unique cells; shows optimal pairs when >= 3, or pair summary when == 2)
+  dynoState.rankingFilterKey = report.activeCombo.key;
+  pillsEl.innerHTML = report.combos.map((c) => `
+    <button type="button" class="dyno-filter-pill ${c.key === report.activeCombo.key ? "active" : ""}" data-dyno-filter="${c.key}">
+      ${escapeHtmlStr(c.label)} (${c.count})
+    </button>
+  `).join("");
+
+  if (report.poolCells.length === 0) {
+    if (recPanel) recPanel.classList.add("hidden");
+    rankTbody.innerHTML = `<tr><td colspan="11" class="dyno-table-empty">No named cells found for ${escapeHtmlStr(report.activeCombo.label)}. Name your cells or check "Include unnamed Slot N runs".</td></tr>`;
+    return;
+  }
+
   if (recPanel) {
-    if (poolCells.length >= 2) {
-      const { topPairs, disjointPairs } = computeBestPairs(poolCells);
-      const displayPairs = poolCells.length >= 3 ? disjointPairs.concat(topPairs.filter((p) => !disjointPairs.includes(p))).slice(0, 4) : topPairs.slice(0, 1);
-      recPanel.innerHTML = displayPairs.map((pair, idx) => {
-        const badgeTitle = poolCells.length >= 3 ? (idx === 0 ? "🥇 Best Race Pair" : idx === 1 ? "🥈 2nd Pair" : `Option #${idx + 1}`) : "🤝 Tested Pair";
+    if (report.displayPairs.length > 0) {
+      recPanel.innerHTML = report.displayPairs.map((pair, idx) => {
+        const badgeTitle = report.poolCells.length >= 3 ? (idx === 0 ? "🥇 Best Race Pair" : idx === 1 ? "🥈 2nd Pair" : `Option #${idx + 1}`) : "🤝 Tested Pair";
         return `<div class="dyno-pair-rec-card ${idx === 0 ? "rank-1" : ""}">
           <div class="dyno-pair-rec-head">
             <span>${badgeTitle}: ${escapeHtmlStr(pair.cellA.cellName)} + ${escapeHtmlStr(pair.cellB.cellName)}</span>
@@ -6274,15 +6389,14 @@ function renderDynoRankingAndPairs() {
     }
   }
 
-  const leaderScore = poolCells[0].score;
-  rankTbody.innerHTML = poolCells.map((c, idx) => {
-    const deltaMv = Math.round((c.score - leaderScore) * 1000);
+  rankTbody.innerHTML = report.poolCells.map((c, idx) => {
     return `<tr class="mono">
-      <td>#${idx + 1}</td>
+      <td>#${c.rank}</td>
       <td><strong>${escapeHtmlStr(c.cellName)}</strong></td>
       <td>${escapeHtmlStr(c.presetLabel)}</td>
       <td class="dyno-score-hero">${c.score.toFixed(4)} V</td>
-      <td>${idx === 0 ? "Leader" : `${deltaMv} mV`}</td>
+      <td>${c.avgDropMv != null ? `-${c.avgDropMv} mV` : "—"}</td>
+      <td>${idx === 0 ? "Leader" : `${c.deltaLeaderMv} mV`}</td>
       <td>${c.punchDrop != null ? `${Math.round(c.punchDrop * 1000)} mV` : "—"}</td>
       <td>${c.lateSag != null ? `${Math.round(c.lateSag * 1000)} mV` : "—"}</td>
       <td>${c.vEnd != null ? `${c.vEnd.toFixed(3)} V` : "—"}</td>
@@ -6307,7 +6421,12 @@ function renderDynoHistoryList() {
   const viewed = getViewedDynoRun();
   listEl.innerHTML = savedRuns.map((r) => {
     const isSelected = viewed && viewed.id === r.id;
-    const cellSummary = (r.slots || []).map((s) => `${s.cellName || `S${s.slotIdx + 1}`}${s.metrics?.score != null ? ` (${s.metrics.score.toFixed(3)}V)` : ""}`).join(" • ");
+    const cellSummary = (r.slots || []).map((s) => {
+      const m = (s.samples && s.samples.length >= 3)
+        ? computeDynoSlotMetrics(s, r.dur, r.targetCurrentMa, r.ratedMaxMa)
+        : s.metrics;
+      return `${s.cellName || `S${s.slotIdx + 1}`}${m?.score != null ? ` (${m.score.toFixed(3)}V)` : ""}`;
+    }).join(" • ");
     const ts = r.createdAt ? new Date(r.createdAt).toLocaleString() : "";
     return `<div class="dyno-history-item ${isSelected ? "active" : ""}" data-dyno-run-id="${escapeHtmlStr(r.id)}">
       <div class="dyno-history-info">
@@ -6696,9 +6815,9 @@ function exportDynoCsv() {
     return;
   }
   const rows = [];
-  rows.push(["Run_ID", "Timestamp_ISO", "Preset", "Target_mA", "Duration_Sec", "Note", "Slot", "Cell_Name", "V0_Rest", "Trickle_Start", "Sample_Sec", "Voltage_V", "Current_mA", "Capacity_mAh", "IR_mOhm", "Score_V", "Punch_mV", "V10_V", "Vend_V", "Est_Peak_V"].join(","));
+  rows.push(["Run_ID", "Timestamp_ISO", "Preset", "Target_mA", "Duration_Sec", "Note", "Slot", "Cell_Name", "V0_Rest", "Trickle_Start", "Sample_Sec", "Voltage_V", "Current_mA", "Capacity_mAh", "IR_mOhm", "Norm_Score_V", "Raw_Score_V", "Avg_Drop_mV", "Sustained_Pct", "Punch_mV", "V10_V", "Vend_V", "Est_Peak_V"].join(","));
   (run.slots || []).forEach((s) => {
-    const m = s.metrics || computeDynoSlotMetrics(s, run.dur, run.targetCurrentMa, run.ratedMaxMa);
+    const m = computeDynoSlotMetrics(s, run.dur, run.targetCurrentMa, run.ratedMaxMa);
     const base = [
       `"${run.id}"`,
       `"${run.createdAt || ""}"`,
@@ -6712,7 +6831,10 @@ function exportDynoCsv() {
       s.trickleStart ? "1" : "0"
     ];
     const tail = [
-      m.score ?? "",
+      m.normScore ?? "",
+      m.rawScore ?? "",
+      m.avgDropMv ?? "",
+      m.sustainedPct ?? "",
       m.punchDrop != null ? Math.round(m.punchDrop * 1000) : "",
       m.v10 ?? "",
       m.vEnd ?? "",
@@ -6741,6 +6863,364 @@ function exportDynoJson() {
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   downloadBlob(blob, `nc3000-dyno-history-${Date.now()}.json`);
   showToast(`✅ Exported ${runs.length} dyno run(s)`);
+}
+
+function getExportableDynoLeaderboardReport(filterKeyOverride = null) {
+  const report = buildDynoLeaderboardReportData(filterKeyOverride);
+  if (!report || !report.activeCombo || report.poolCells.length === 0) {
+    showToast("No ranked cells available to export.", "warning");
+    return null;
+  }
+  return report;
+}
+
+function buildDynoLeaderboardCsvString(reportData) {
+  if (!reportData || !reportData.activeCombo || reportData.poolCells.length === 0) return "";
+  const csvCell = (val) => {
+    const s = String(val ?? "");
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const scoringMode = reportData.useNorm
+    ? `V0-Normalized (${DYNO_NORM_REF_V.toFixed(3)}V Ref)`
+    : "Raw Loaded Voltage";
+  const poolLabel = reportData.activeCombo.label;
+  const rows = [];
+
+  rows.push([
+    "Rank",
+    "Cell_Name",
+    "Motor_Preset",
+    "Test_Pool",
+    "Scoring_Mode",
+    "Active_Score_V",
+    "Norm_Score_1.42V",
+    "Raw_Score_V",
+    "V0_Rest_V",
+    "Avg_Drop_mV",
+    "Sustained_Pct",
+    "Delta_Leader_mV",
+    "Punch_1s_mV",
+    "Late_Sag_10s_End_mV",
+    "V10_V",
+    "Vend_V",
+    "IR_mOhm",
+    "Tested_ISO"
+  ].join(","));
+
+  reportData.poolCells.forEach((c) => {
+    rows.push([
+      c.rank,
+      csvCell(c.cellName),
+      csvCell(c.presetLabel),
+      csvCell(poolLabel),
+      csvCell(scoringMode),
+      c.score != null ? c.score.toFixed(4) : "",
+      c.normScore != null ? c.normScore.toFixed(4) : "",
+      c.rawScore != null ? c.rawScore.toFixed(4) : "",
+      c.v0 != null ? c.v0.toFixed(3) : "",
+      c.avgDropMv != null ? c.avgDropMv : "",
+      c.sustainedPct != null ? c.sustainedPct.toFixed(1) : "",
+      c.deltaLeaderMv,
+      c.punchDrop != null ? Math.round(c.punchDrop * 1000) : "",
+      c.lateSag != null ? Math.round(c.lateSag * 1000) : "",
+      c.v10 != null ? c.v10.toFixed(3) : "",
+      c.vEnd != null ? c.vEnd.toFixed(3) : "",
+      c.irMohm > 0 ? c.irMohm : "",
+      csvCell(c.createdAt || "")
+    ].join(","));
+  });
+
+  const disjointSet = new Set(reportData.disjointPairs || []);
+  rows.push("");
+  rows.push([
+    "Pair_Rank",
+    "Pair_Type",
+    "Cell_A",
+    "Cell_B",
+    "Combined_Voltage_V",
+    "Avg_Score_V",
+    "Delta_Score_mV",
+    "Delta_Vend_mV",
+    "Delta_IR_mOhm",
+    "Pair_Rating_Score"
+  ].join(","));
+
+  (reportData.displayPairs || []).forEach((pair, idx) => {
+    const pairType = disjointSet.has(pair) ? "Disjoint Race Pair" : "Top Alternative Pair";
+    rows.push([
+      idx + 1,
+      csvCell(pairType),
+      csvCell(pair.cellA.cellName),
+      csvCell(pair.cellB.cellName),
+      pair.combinedScore.toFixed(4),
+      pair.avgScore.toFixed(4),
+      pair.deltaScoreMv,
+      pair.deltaVendMv != null ? pair.deltaVendMv : "",
+      pair.deltaIrMohm,
+      pair.pairRatingMv
+    ].join(","));
+  });
+
+  return rows.join("\r\n");
+}
+
+function exportDynoLeaderboardCsv() {
+  const reportData = getExportableDynoLeaderboardReport();
+  if (!reportData) return;
+  const csv = buildDynoLeaderboardCsvString(reportData);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  downloadBlob(blob, `nc3000-leaderboard-${reportData.activeCombo.dur}s-${reportData.activeCombo.targetCurrentMa}mA.csv`);
+  showToast("✅ Exported Leaderboard & Best Pairs CSV");
+}
+
+function buildDynoLeaderboardHtmlString(reportData) {
+  if (!reportData || !reportData.activeCombo || reportData.poolCells.length === 0) return "";
+  const generatedIso = new Date().toISOString();
+  const scoringMode = reportData.useNorm
+    ? `V0-Normalized (${DYNO_NORM_REF_V.toFixed(3)}V Ref)`
+    : "Raw Loaded Voltage";
+  const poolLabel = reportData.activeCombo.label;
+  const disjointSet = new Set(reportData.disjointPairs || []);
+
+  const pairCardsHtml = (reportData.displayPairs && reportData.displayPairs.length > 0)
+    ? reportData.displayPairs.map((pair, idx) => {
+        const badgeTitle = reportData.poolCells.length >= 3
+          ? (idx === 0 ? "🥇 Best Race Pair" : idx === 1 ? "🥈 2nd Pair" : `Option #${idx + 1}`)
+          : "🤝 Tested Pair";
+        const pairType = disjointSet.has(pair) ? "Disjoint Race Pair" : "Top Alternative Pair";
+        return `<div class="pair-card ${idx === 0 ? "rank-1" : ""}">
+          <div class="pair-head">
+            <span class="pair-title">${badgeTitle}: <strong>${escapeHtmlStr(pair.cellA.cellName)} + ${escapeHtmlStr(pair.cellB.cellName)}</strong></span>
+            <span class="pair-combined mono">${pair.combinedScore.toFixed(4)} V</span>
+          </div>
+          <div class="pair-meta mono">
+            <span class="badge">${escapeHtmlStr(pairType)}</span>
+            <span>Avg: ${pair.avgScore.toFixed(4)} V</span>
+            <span>ΔScore: ${pair.deltaScoreMv} mV</span>
+            <span>ΔEnd: ${pair.deltaVendMv != null ? `${pair.deltaVendMv} mV` : "—"}</span>
+            <span>ΔIR: ${pair.deltaIrMohm} mΩ</span>
+            <span>Rating: ${pair.pairRatingMv}</span>
+          </div>
+        </div>`;
+      }).join("")
+    : `<div class="empty-note">At least 2 ranked cells are required to recommend matching race pairs.</div>`;
+
+  const rowsHtml = reportData.poolCells.map((c) => {
+    const scoreDisplay = c.normScore != null
+      ? `${c.normScore.toFixed(4)} V`
+      : (c.score != null ? `${c.score.toFixed(4)} V` : "—");
+    const rawDisplay = c.rawScore != null ? `${c.rawScore.toFixed(4)} V` : "—";
+    const testedText = c.createdAt ? new Date(c.createdAt).toLocaleString() : "—";
+    const searchKey = escapeHtmlStr(`${c.cellName} ${c.presetLabel}`.toLowerCase());
+    return `<tr data-cell-search="${searchKey}">
+      <td class="mono">#${c.rank}</td>
+      <td><strong>${escapeHtmlStr(c.cellName)}</strong></td>
+      <td>${escapeHtmlStr(c.presetLabel)}</td>
+      <td class="mono accent">${scoreDisplay}</td>
+      <td class="mono">${rawDisplay}</td>
+      <td class="mono">${c.v0 != null ? `${c.v0.toFixed(3)} V` : "—"}</td>
+      <td class="mono">${c.avgDropMv != null ? `-${c.avgDropMv} mV` : "—"}</td>
+      <td class="mono">${c.sustainedPct != null ? `${c.sustainedPct.toFixed(1)}%` : "—"}</td>
+      <td class="mono">${c.rank === 1 ? "Leader" : `${c.deltaLeaderMv} mV`}</td>
+      <td class="mono">${c.punchDrop != null ? `${Math.round(c.punchDrop * 1000)} mV` : "—"}</td>
+      <td class="mono">${c.lateSag != null ? `${Math.round(c.lateSag * 1000)} mV` : "—"}</td>
+      <td class="mono">${c.vEnd != null ? `${c.vEnd.toFixed(3)} V` : "—"}</td>
+      <td class="mono">${c.irMohm > 0 ? `${c.irMohm} mΩ` : "—"}</td>
+      <td class="mono">${escapeHtmlStr(testedText)}</td>
+    </tr>`;
+  }).join("");
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NC3000 Pro Leaderboard &amp; Best-Pair Report — ${escapeHtmlStr(poolLabel)}</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card: #1e293b;
+      --border: #334155;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --accent: #34d399;
+      --blue: #38bdf8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .container { max-width: 1200px; margin: 0 auto; }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 16px;
+      flex-wrap: wrap;
+      padding: 18px 20px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      margin-bottom: 18px;
+    }
+    .header h1 { margin: 0 0 6px; font-size: 20px; }
+    .meta-row { display: flex; flex-wrap: wrap; gap: 12px; color: var(--muted); font-size: 13px; }
+    .actions { display: flex; gap: 10px; align-items: center; }
+    .btn {
+      padding: 8px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: #0ea5e9;
+      color: #082f49;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .section {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px 18px;
+      margin-bottom: 18px;
+    }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 12px;
+    }
+    .section h2 { margin: 0; font-size: 16px; }
+    .search-input {
+      padding: 6px 10px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      min-width: 240px;
+      font-size: 13px;
+    }
+    .pairs-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+      gap: 10px;
+    }
+    .pair-card {
+      background: rgba(15, 23, 42, 0.65);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 14px;
+    }
+    .pair-card.rank-1 { border-color: rgba(52, 211, 153, 0.7); background: rgba(16, 185, 129, 0.08); }
+    .pair-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 14px; }
+    .pair-combined { color: var(--accent); font-weight: 700; }
+    .pair-meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px; color: var(--muted); }
+    .badge { padding: 1px 6px; border-radius: 999px; background: rgba(56, 189, 248, 0.16); color: var(--blue); }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+    th, td { padding: 8px 10px; border-bottom: 1px solid var(--border); text-align: left; white-space: nowrap; }
+    th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .accent { color: var(--accent); font-weight: 700; }
+    .empty-note { color: var(--muted); font-size: 13px; }
+    @media print {
+      body { background: #fff; color: #111827; padding: 0; }
+      .header, .section, .pair-card { background: #fff; border-color: #cbd5e1; color: #111827; }
+      .meta-row, .pair-meta, th { color: #475569; }
+      .no-print { display: none !important; }
+      .accent, .pair-combined { color: #047857; }
+      .badge { background: #e0f2fe; color: #0369a1; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div>
+        <h1>🏆 SkyRC NC3000 Pro — Cell Ranking &amp; Best-Pair Report</h1>
+        <div class="meta-row mono">
+          <span>Pool: <strong>${escapeHtmlStr(poolLabel)}</strong></span>
+          <span>Scoring Mode: <strong>${escapeHtmlStr(scoringMode)}</strong></span>
+          <span>Cells Ranked: <strong>${reportData.poolCells.length}</strong></span>
+          <span>Generated: ${escapeHtmlStr(new Date(generatedIso).toLocaleString())}</span>
+        </div>
+      </div>
+      <div class="actions no-print">
+        <button type="button" class="btn" onclick="window.print()">🖨️ Print / Save PDF</button>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-head">
+        <h2>🤝 Best Matching Race Pairs</h2>
+      </div>
+      <div class="pairs-grid">
+        ${pairCardsHtml}
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-head">
+        <h2>📊 Cell Ranking Leaderboard (${escapeHtmlStr(poolLabel)})</h2>
+        <input type="search" id="cellSearchInput" class="search-input no-print" placeholder="Filter cells or motor preset..." />
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Cell</th>
+              <th>Motor Preset</th>
+              <th>Norm Score (1.42V)</th>
+              <th>Raw Score</th>
+              <th>V0 (Rest)</th>
+              <th>Avg Drop (ΔV)</th>
+              <th>Sustained %</th>
+              <th>Δ Leader</th>
+              <th>Punch (1s)</th>
+              <th>10s → End</th>
+              <th>V(end)</th>
+              <th>IR (mΩ)</th>
+              <th>Tested</th>
+            </tr>
+          </thead>
+          <tbody id="leaderboardTbody">
+            ${rowsHtml}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function () {
+      var input = document.getElementById("cellSearchInput");
+      var tbody = document.getElementById("leaderboardTbody");
+      if (!input || !tbody) return;
+      input.addEventListener("input", function () {
+        var q = String(input.value || "").trim().toLowerCase();
+        tbody.querySelectorAll("tr").forEach(function (tr) {
+          var key = tr.getAttribute("data-cell-search") || "";
+          tr.style.display = (!q || key.indexOf(q) !== -1) ? "" : "none";
+        });
+      });
+    })();
+  <\/script>
+</body>
+</html>`;
+}
+
+function exportDynoLeaderboardHtml() {
+  const reportData = getExportableDynoLeaderboardReport();
+  if (!reportData) return;
+  const html = buildDynoLeaderboardHtmlString(reportData);
+  const blob = new Blob([html], { type: "text/html;charset=utf-8;" });
+  downloadBlob(blob, `nc3000-leaderboard-report-${reportData.activeCombo.dur}s-${reportData.activeCombo.targetCurrentMa}mA.html`);
+  showToast("✅ Exported Leaderboard & Best Pairs HTML Report");
 }
 
 function initBatteryDyno() {
@@ -6790,6 +7270,16 @@ function initBatteryDyno() {
       dynoState.includeUnnamedInRanking = Boolean(e.target.checked);
       saveDynoPrefs();
       renderDynoRankingAndPairs();
+    });
+  }
+
+  const normChk = document.getElementById("dynoNormalizeV0Chk");
+  if (normChk) {
+    normChk.checked = dynoState.normalizeV0;
+    normChk.addEventListener("change", (e) => {
+      dynoState.normalizeV0 = Boolean(e.target.checked);
+      saveDynoPrefs();
+      renderDynoAll();
     });
   }
 
@@ -6873,6 +7363,8 @@ function initBatteryDyno() {
 
   document.getElementById("btnDynoExportCsv")?.addEventListener("click", exportDynoCsv);
   document.getElementById("btnDynoExportJson")?.addEventListener("click", exportDynoJson);
+  document.getElementById("btnDynoExportLeaderboardCsv")?.addEventListener("click", exportDynoLeaderboardCsv);
+  document.getElementById("btnDynoExportLeaderboardHtml")?.addEventListener("click", exportDynoLeaderboardHtml);
   document.getElementById("btnDynoImportJson")?.addEventListener("click", () => {
     document.getElementById("dynoImportFileInput")?.click();
   });
@@ -7174,6 +7666,7 @@ window.queryHwSettingsFromCharger = queryHwSettingsFromCharger;
 window.factoryResetHw = factoryResetHw;
 window.changeHwPin = changeHwPin;
 window.TAMIYA_MOTOR_PRESETS = TAMIYA_MOTOR_PRESETS;
+window.DYNO_NORM_REF_V = DYNO_NORM_REF_V;
 window.dynoState = dynoState;
 window.isDynoSessionActive = isDynoSessionActive;
 window.buildDynoDischargeFrame = buildDynoDischargeFrame;
@@ -7187,3 +7680,8 @@ window.finalizeDynoRun = finalizeDynoRun;
 window.loadDynoSavedRuns = loadDynoSavedRuns;
 window.saveDynoRuns = saveDynoRuns;
 window.renderDynoAll = renderDynoAll;
+window.buildDynoLeaderboardReportData = buildDynoLeaderboardReportData;
+window.buildDynoLeaderboardCsvString = buildDynoLeaderboardCsvString;
+window.buildDynoLeaderboardHtmlString = buildDynoLeaderboardHtmlString;
+window.exportDynoLeaderboardCsv = exportDynoLeaderboardCsv;
+window.exportDynoLeaderboardHtml = exportDynoLeaderboardHtml;

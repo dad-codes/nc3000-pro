@@ -796,6 +796,12 @@
             <h3>Run Results &amp; Checkpoint Sag Breakdown</h3>
             <span class="dyno-subtitle mono" id="dynoResultsMeta">—</span>
           </div>
+          <div class="dyno-ranking-controls">
+            <label class="dyno-chk-inline" title="Normalize loaded voltages and checkpoints to a 1.420V starting resting voltage so cells tested at different states of charge compare fairly by voltage drop">
+              <input type="checkbox" id="dynoNormalizeV0Chk" checked />
+              <span>Normalize for V0 (1.420V Ref / ΔV Drop)</span>
+            </label>
+          </div>
         </div>
         <div class="dyno-two-cell-delta-bar hidden" id="dynoTwoCellDeltaBar"></div>
         <div class="dyno-table-scroll">
@@ -804,7 +810,8 @@
               <tr>
                 <th>Rank</th>
                 <th>Cell / Slot</th>
-                <th>Score (Avg V)</th>
+                <th id="thDynoScore">Norm Score (1.42V)</th>
+                <th>Avg Drop (ΔV)</th>
                 <th id="thEstPeakV" class="hidden">Est. V @ Peak</th>
                 <th>V0 (Rest)</th>
                 <th>Punch (1s)</th>
@@ -817,7 +824,7 @@
               </tr>
             </thead>
             <tbody id="dynoResultsTbody">
-              <tr><td colspan="12" class="dyno-table-empty">No run results loaded.</td></tr>
+              <tr><td colspan="13" class="dyno-table-empty">No run results loaded.</td></tr>
             </tbody>
           </table>
         </div>
@@ -835,6 +842,8 @@
               <input type="checkbox" id="dynoIncludeUnnamedChk" />
               <span>Include unnamed "Slot N" runs</span>
             </label>
+            <button type="button" id="btnDynoExportLeaderboardCsv" class="btn small secondary" title="Export ranked cells and recommended matching pairs as CSV">📊 Export Leaderboard CSV</button>
+            <button type="button" id="btnDynoExportLeaderboardHtml" class="btn small secondary" title="Export standalone interactive & printable HTML leaderboard report with best matching pairs">🏆 Export Report (HTML)</button>
             <button type="button" id="btnDynoClearHistory" class="btn small danger">🗑️ Clear All Saved Runs</button>
           </div>
         </div>
@@ -852,7 +861,8 @@
                 <th>#</th>
                 <th>Cell</th>
                 <th>Motor Preset</th>
-                <th>Score (Avg V)</th>
+                <th id="thRankScore">Norm Score (1.42V)</th>
+                <th>Avg Drop (ΔV)</th>
                 <th>Δ Leader</th>
                 <th>Punch (1s)</th>
                 <th>10s → End</th>
@@ -862,7 +872,7 @@
               </tr>
             </thead>
             <tbody id="dynoRankingTbody">
-              <tr><td colspan="10" class="dyno-table-empty">No ranked cells for this filter yet.</td></tr>
+              <tr><td colspan="11" class="dyno-table-empty">No ranked cells for this filter yet.</td></tr>
             </tbody>
           </table>
         </div>
