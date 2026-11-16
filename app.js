@@ -1,6 +1,6 @@
 // SkyRC NC3000 Pro — BLE Reverse Engineering & Firmware Workbench
-const APP_VERSION = "v1.2.23";
-const APP_BUILD_DATE = "Build 47 (2026.11.14)";
+const APP_VERSION = "v1.2.26";
+const APP_BUILD_DATE = "Build 50 (2026.11.17)";
 window.APP_VERSION = APP_VERSION;
 window.APP_BUILD_DATE = APP_BUILD_DATE;
 
@@ -119,38 +119,67 @@ const btnSendHex = document.getElementById("btnSendHex");
 const packetLogEl = document.getElementById("packetLog");
 const envWarningEl = document.getElementById("envWarning");
 
-// Build exhaustive optionalServices list so Chrome Web Bluetooth grants access to vendor services
+const BLE_GATT_SERVICE_ALIASES = {
+  generic_access: "00001800-0000-1000-8000-00805f9b34fb",
+  generic_attribute: "00001801-0000-1000-8000-00805f9b34fb",
+  device_information: "0000180a-0000-1000-8000-00805f9b34fb",
+  battery_service: "0000180f-0000-1000-8000-00805f9b34fb"
+};
+
+const SKYRC_PRIMARY_SERVICE_UUID = "0000ffe0-0000-1000-8000-00805f9b34fb";
+const SKYRC_VENDOR_SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb";
+const SKYRC_UART_CHAR_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb";
+
+// Normalize numeric 16/32-bit UUIDs, short hex strings, and GATT aliases to canonical 128-bit lowercase UUID strings
+// so strict iOS WebBLE wrappers (Bluefy / WebBLE) never receive raw integers or non-hex alias names.
+function normalizeBleUuid(u) {
+  if (typeof u === "number" && Number.isInteger(u) && u >= 0 && u <= 0xffffffff) {
+    return `${u.toString(16).padStart(8, "0")}-0000-1000-8000-00805f9b34fb`;
+  }
+  if (typeof u !== "string") return null;
+  const trimmed = u.trim().toLowerCase();
+  if (!trimmed) return null;
+  if (BLE_GATT_SERVICE_ALIASES[trimmed]) {
+    return BLE_GATT_SERVICE_ALIASES[trimmed];
+  }
+  const hexCandidate = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
+  if (/^[0-9a-f]{4}$/.test(hexCandidate) || /^[0-9a-f]{8}$/.test(hexCandidate)) {
+    return `${hexCandidate.padStart(8, "0")}-0000-1000-8000-00805f9b34fb`;
+  }
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(trimmed)) {
+    return trimmed;
+  }
+  return null;
+}
+
+// Build clean, deduplicated optionalServices list of canonical 128-bit UUID strings
 function buildOptionalServices() {
-  const list = new Set([
-    "generic_access",
-    "generic_attribute",
-    "device_information",
-    "battery_service",
+  const baseServices = [
+    SKYRC_PRIMARY_SERVICE_UUID,
+    SKYRC_VENDOR_SERVICE_UUID,
+    "00001800-0000-1000-8000-00805f9b34fb",
+    "00001801-0000-1000-8000-00805f9b34fb",
+    "0000180a-0000-1000-8000-00805f9b34fb",
+    "0000180f-0000-1000-8000-00805f9b34fb",
+    "0000fee0-0000-1000-8000-00805f9b34fb",
+    "0000fee7-0000-1000-8000-00805f9b34fb",
+    "0000fe59-0000-1000-8000-00805f9b34fb",
     "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
     "00001530-1212-efde-1523-785feabcd123",
     "f000ffc0-0451-4000-b000-000000000000",
     "1d14d6ee-fd63-4fa1-bfa4-8f47b42119f0",
     "00010203-0405-0607-0809-0a0b0c0d1912",
-    "49535343-fe7d-4ae5-8fa9-9fafd205e455",
-    "0000fee0-0000-1000-8000-00805f9b34fb",
-    "0000fee7-0000-1000-8000-00805f9b34fb",
-    ...customServiceUuids
-  ]);
-
-  // Add 16-bit vendor ranges commonly used by SkyRC / WCH / Telink / TI / Nordic / Beken BLE chips
-  const ranges = [
-    [0x1800, 0x183f],
-    [0xfe00, 0xffff],
-    [0xfd00, 0xfdff],
-    [0xf000, 0xf0ff],
-    [0xae00, 0xaeff],
-    [0xa000, 0xa0ff],
-    [0xffe0, 0xffff]
+    "49535343-fe7d-4ae5-8fa9-9fafd205e455"
   ];
-  for (const [start, end] of ranges) {
-    for (let u = start; u <= end; u++) {
-      list.add(u);
-    }
+
+  const list = new Set();
+  for (const svc of baseServices) {
+    const norm = normalizeBleUuid(svc);
+    if (norm) list.add(norm);
+  }
+  for (const custom of customServiceUuids) {
+    const norm = normalizeBleUuid(custom);
+    if (norm) list.add(norm);
   }
   return Array.from(list);
 }
@@ -419,34 +448,111 @@ function setStatus(state, text) {
   updateKeeperHeaderPill();
 }
 
+function isUserCancelledBleError(err) {
+  if (!err) return false;
+  if (err.name === "NotFoundError") return true;
+  const msg = String(err.message || err || "");
+  return /cancel|canceled|user.*denied|choos/i.test(msg);
+}
+
+function isIosWebBleBrowser() {
+  if (typeof navigator === "undefined") return false;
+  return /Bluefy|WebBLE|iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+}
+
+function toUint8Array(val) {
+  if (!val) return new Uint8Array(0);
+  if (val instanceof Uint8Array) return val;
+  if (ArrayBuffer.isView(val)) {
+    return new Uint8Array(val.buffer, val.byteOffset, val.byteLength);
+  }
+  if (val instanceof ArrayBuffer) {
+    return new Uint8Array(val);
+  }
+  if (Array.isArray(val)) {
+    return new Uint8Array(val);
+  }
+  if (val.buffer instanceof ArrayBuffer) {
+    return new Uint8Array(val.buffer, val.byteOffset || 0, val.byteLength || val.buffer.byteLength);
+  }
+  return new Uint8Array(0);
+}
+
+async function requestBleDeviceWithFallbacks(acceptAll, optionalServices) {
+  const isIosBle = isIosWebBleBrowser();
+  const primaryOptions = acceptAll
+    ? { acceptAllDevices: true, optionalServices }
+    : {
+        filters: [
+          { services: [SKYRC_PRIMARY_SERVICE_UUID] },
+          { services: [SKYRC_VENDOR_SERVICE_UUID] },
+          { namePrefix: "NC3000" },
+          { namePrefix: "SkyRC" },
+          { namePrefix: "SKYRC" },
+          { namePrefix: "MC3000" },
+          { namePrefix: "B6" }
+        ],
+        optionalServices
+      };
+
+  const candidates = [
+    { label: isIosBle ? "iOS/Bluefy canonical UUID options" : "Primary canonical UUID options", options: primaryOptions },
+    {
+      label: "Minimal acceptAllDevices + SkyRC 0xFFE0",
+      options: { acceptAllDevices: true, optionalServices: [SKYRC_PRIMARY_SERVICE_UUID] }
+    },
+    {
+      label: "Minimal service filter (0xFFE0) + optionalServices",
+      options: { filters: [{ services: [SKYRC_PRIMARY_SERVICE_UUID] }], optionalServices: [SKYRC_PRIMARY_SERVICE_UUID] }
+    },
+    {
+      label: "Minimal namePrefix filter + optionalServices",
+      options: { filters: [{ namePrefix: "NC3000" }, { namePrefix: "SkyRC" }], optionalServices: [SKYRC_PRIMARY_SERVICE_UUID] }
+    },
+    {
+      label: "Bare acceptAllDevices",
+      options: { acceptAllDevices: true }
+    },
+    {
+      label: "Bare service filter (0xFFE0)",
+      options: { filters: [{ services: [SKYRC_PRIMARY_SERVICE_UUID] }] }
+    }
+  ];
+
+  let lastErr = null;
+  for (let i = 0; i < candidates.length; i++) {
+    const { label, options } = candidates[i];
+    try {
+      if (i > 0) {
+        appendLog("SYS", null, null, `Trying BLE scan fallback #${i + 1}: ${label}…`);
+      }
+      return await navigator.bluetooth.requestDevice(options);
+    } catch (err) {
+      if (isUserCancelledBleError(err)) {
+        throw err;
+      }
+      lastErr = err;
+      appendLog("SYS", null, null, `BLE requestDevice (${label}) rejected: ${err?.message || err}`);
+    }
+  }
+  throw lastErr || new Error("No compatible Web Bluetooth requestDevice options succeeded.");
+}
+
 async function connectBle() {
   if (!navigator.bluetooth) {
-    showToast("Web Bluetooth API is not available in this browser. Please open this page in Google Chrome or Microsoft Edge.", "error");
+    showToast("Web Bluetooth API is not available in this browser. Please open this page in Google Chrome, Microsoft Edge, or Bluefy/WebBLE on iOS.", "error");
     return;
   }
 
   try {
     setStatus("connecting", "Requesting device…");
     const optionalServices = buildOptionalServices();
-    const acceptAll = acceptAllDevicesEl.checked;
+    const acceptAll = acceptAllDevicesEl ? acceptAllDevicesEl.checked : true;
 
-    const options = acceptAll
-      ? { acceptAllDevices: true, optionalServices }
-      : {
-          filters: [
-            { namePrefix: "NC3000" },
-            { namePrefix: "SkyRC" },
-            { namePrefix: "SKYRC" },
-            { namePrefix: "MC3000" },
-            { namePrefix: "B6" },
-            { services: [0xffe0] },
-            { services: [0xfff0] }
-          ],
-          optionalServices
-        };
-
-    bleDevice = await navigator.bluetooth.requestDevice(options);
-    bleDevice.addEventListener("gattserverdisconnected", onDisconnected);
+    bleDevice = await requestBleDeviceWithFallbacks(acceptAll, optionalServices);
+    if (typeof bleDevice.addEventListener === "function") {
+      bleDevice.addEventListener("gattserverdisconnected", onDisconnected);
+    }
 
     document.getElementById("infoName").textContent = bleDevice.name || "(Unnamed BLE Device)";
     document.getElementById("infoId").textContent = bleDevice.id || "—";
@@ -470,9 +576,13 @@ async function connectBle() {
     await enumerateGatt();
   } catch (err) {
     setStatus("disconnected", "Disconnected");
-    appendLog("ERR", null, null, `Connection failed: ${err.message}`);
+    const errMsg = err?.message || String(err);
+    appendLog("ERR", null, null, `Connection failed: ${errMsg}`);
+    if (!isUserCancelledBleError(err)) {
+      showToast(`BLE connection failed: ${errMsg}`, "error", 5000);
+    }
     if (typeof window.logAnalyticsEvent === "function") {
-      window.logAnalyticsEvent("ble_connect_error", { error: err.message });
+      window.logAnalyticsEvent("ble_connect_error", { error: errMsg });
     }
   }
 }
@@ -510,14 +620,37 @@ async function enumerateGatt() {
   sessionRecord.services = [];
 
   appendLog("SYS", null, null, "Discovering primary GATT services…");
-  const services = await gattServer.getPrimaryServices();
+  let services = [];
+  try {
+    services = await gattServer.getPrimaryServices();
+  } catch (e) {
+    appendLog("SYS", null, null, `getPrimaryServices() fallback (${e?.message || e}); probing known services…`);
+  }
+  if (!Array.isArray(services) || services.length === 0) {
+    const probeServiceUuids = [
+      SKYRC_PRIMARY_SERVICE_UUID,
+      "0000180a-0000-1000-8000-00805f9b34fb",
+      SKYRC_VENDOR_SERVICE_UUID
+    ];
+    const probed = [];
+    for (const uuid of probeServiceUuids) {
+      try {
+        if (typeof gattServer.getPrimaryService === "function") {
+          const svc = await gattServer.getPrimaryService(uuid);
+          if (svc) probed.push(svc);
+        }
+      } catch (_) {}
+    }
+    services = probed;
+  }
   appendLog("SYS", null, null, `Discovered ${services.length} GATT service(s).`);
 
   const writableChars = [];
   const notifyChars = [];
 
   for (const service of services) {
-    const sUuid = service.uuid.toLowerCase();
+    const rawSUuid = String(service.uuid || "").toLowerCase();
+    const sUuid = normalizeBleUuid(rawSUuid) || rawSUuid;
     const sRecord = { uuid: sUuid, name: formatUuid(sUuid), characteristics: [] };
     sessionRecord.services.push(sRecord);
 
@@ -534,11 +667,23 @@ async function enumerateGatt() {
     try {
       chars = await service.getCharacteristics();
     } catch (e) {
-      appendLog("ERR", sUuid, null, `Could not list characteristics: ${e.message}`);
+      appendLog("ERR", sUuid, null, `Could not list characteristics: ${e?.message || e}`);
+    }
+    if ((!Array.isArray(chars) || chars.length === 0) && sUuid.includes("ffe0") && typeof service.getCharacteristic === "function") {
+      try {
+        const ffe1 = await service.getCharacteristic(SKYRC_UART_CHAR_UUID);
+        if (ffe1) {
+          chars = [ffe1];
+          appendLog("SYS", sUuid, null, "Discovered 0xFFE1 via getCharacteristic() fallback.");
+        }
+      } catch (_) {}
     }
 
     for (const char of chars) {
-      const cUuid = char.uuid.toLowerCase();
+      const rawCUuid = String(char.uuid || "").toLowerCase();
+      const cUuid = normalizeBleUuid(rawCUuid) || rawCUuid;
+      const charProps = char.properties || {};
+      const isFfe1 = cUuid.includes("ffe1");
       const props = [];
       for (const k of [
         "read",
@@ -548,8 +693,18 @@ async function enumerateGatt() {
         "indicate",
         "authenticatedSignedWrites"
       ]) {
-        if (char.properties[k]) props.push(k);
+        if (charProps[k]) props.push(k);
       }
+      if (isFfe1 && !charProps.write && !charProps.writeWithoutResponse) {
+        props.push("write");
+      }
+      if (isFfe1 && !charProps.notify && !charProps.indicate) {
+        props.push("notify");
+      }
+
+      const canRead = !!charProps.read;
+      const canWrite = !!(charProps.write || charProps.writeWithoutResponse || isFfe1);
+      const canNotify = !!(charProps.notify || charProps.indicate || isFfe1);
 
       characteristicsMap.set(cUuid, { char, serviceUuid: sUuid, props });
       sRecord.characteristics.push({ uuid: cUuid, name: formatUuid(cUuid), properties: props });
@@ -568,9 +723,9 @@ async function enumerateGatt() {
           <div class="prop-badges">${badgesHtml}</div>
         </div>
         <div class="char-actions">
-          ${char.properties.read ? `<button class="btn small" data-read-uuid="${cUuid}">Read</button>` : ""}
+          ${canRead ? `<button class="btn small" data-read-uuid="${cUuid}">Read</button>` : ""}
           ${
-            char.properties.write || char.properties.writeWithoutResponse
+            canWrite
               ? `<button class="btn small" data-select-tx="${cUuid}">Use as TX</button>`
               : ""
           }
@@ -579,26 +734,30 @@ async function enumerateGatt() {
       `;
       card.appendChild(row);
 
-      if (char.properties.write || char.properties.writeWithoutResponse) {
+      if (canWrite) {
         writableChars.push(cUuid);
       }
 
       // Auto-subscribe to all notify / indicate characteristics
-      if (char.properties.notify || char.properties.indicate) {
+      if (canNotify) {
         try {
-          await char.startNotifications();
-          char.addEventListener("characteristicvaluechanged", (ev) => {
-            onNotification(cUuid, ev.target.value);
-          });
+          if (typeof char.startNotifications === "function") {
+            await char.startNotifications();
+          }
+          if (typeof char.addEventListener === "function") {
+            char.addEventListener("characteristicvaluechanged", (ev) => {
+              onNotification(cUuid, ev?.target?.value ?? char.value);
+            });
+          }
           notifyChars.push(cUuid);
           appendLog("SYS", cUuid, null, "Subscribed to notifications.");
         } catch (err) {
-          appendLog("ERR", cUuid, null, `Failed to start notifications: ${err.message}`);
+          appendLog("ERR", cUuid, null, `Failed to start notifications: ${err?.message || err}`);
         }
       }
 
       // Auto-read standard Device Info & Generic Access characteristics
-      if (char.properties.read && (sUuid.includes("180a") || sUuid.includes("1800") || sUuid.includes("180f"))) {
+      if (canRead && (sUuid.includes("180a") || sUuid.includes("1800") || sUuid.includes("180f"))) {
         await readCharacteristicValue(cUuid);
       }
     }
@@ -691,7 +850,7 @@ async function readCharacteristicValue(cUuid) {
   if (!entry) return;
   try {
     const dataView = await entry.char.readValue();
-    const bytes = new Uint8Array(dataView.buffer, dataView.byteOffset, dataView.byteLength);
+    const bytes = toUint8Array(dataView);
     const ascii = bytesToAscii(bytes);
     const hex = bytesToHex(bytes);
 
@@ -726,7 +885,7 @@ async function readCharacteristicValue(cUuid) {
 
     appendLog("RX", cUuid, bytes, "(Read Value)");
   } catch (err) {
-    appendLog("ERR", cUuid, null, `Read failed: ${err.message}`);
+    appendLog("ERR", cUuid, null, `Read failed: ${err?.message || err}`);
   }
 }
 
@@ -734,7 +893,8 @@ let rxReassemblyBuffer = new Uint8Array(0);
 let rxReassemblyTimer = null;
 
 function onNotification(cUuid, dataView) {
-  const bytes = new Uint8Array(dataView.buffer, dataView.byteOffset, dataView.byteLength);
+  const bytes = toUint8Array(dataView);
+  if (bytes.length === 0) return;
 
   const valEl = document.getElementById(`val-${cUuid}`);
   if (valEl) {
@@ -819,28 +979,54 @@ async function sendBytes(bytes, label = "") {
     const entry = characteristicsMap.get(targetUuid);
     if (!entry) return;
 
-    const mode = writeModeSelect.value;
+    const txBytes =
+      bytes instanceof Uint8Array &&
+      bytes.byteOffset === 0 &&
+      bytes.byteLength === bytes.buffer.byteLength
+        ? bytes
+        : new Uint8Array(bytes);
+    const mode = writeModeSelect ? writeModeSelect.value : "auto";
+    const charProps = entry.char.properties || {};
+
     try {
       if (
-        mode === "withoutResponse" ||
-        (mode === "auto" && entry.char.properties.writeWithoutResponse)
+        (mode === "withoutResponse" || (mode === "auto" && charProps.writeWithoutResponse)) &&
+        typeof entry.char.writeValueWithoutResponse === "function"
       ) {
-        await entry.char.writeValueWithoutResponse(bytes);
+        await entry.char.writeValueWithoutResponse(txBytes);
+      } else if (typeof entry.char.writeValueWithResponse === "function") {
+        await entry.char.writeValueWithResponse(txBytes);
       } else {
-        await entry.char.writeValueWithResponse(bytes);
+        await entry.char.writeValue(txBytes);
       }
-      appendLog("TX", targetUuid, bytes, label);
+      appendLog("TX", targetUuid, txBytes, label);
     } catch (err) {
-      // Fallback if writeWithoutResponse or writeWithResponse fails
+      // Fallback if writeWithoutResponse or writeWithResponse fails (e.g. iOS WebBLE bridges)
       try {
-        await entry.char.writeValue(bytes);
-        appendLog("TX", targetUuid, bytes, `${label} (fallback writeValue)`);
+        if (typeof entry.char.writeValue === "function") {
+          await entry.char.writeValue(txBytes);
+          appendLog("TX", targetUuid, txBytes, `${label} (fallback writeValue)`);
+        } else if (typeof entry.char.writeValueWithResponse === "function") {
+          await entry.char.writeValueWithResponse(txBytes);
+          appendLog("TX", targetUuid, txBytes, `${label} (fallback writeValueWithResponse)`);
+        } else {
+          throw err;
+        }
       } catch (err2) {
-        appendLog("ERR", targetUuid, bytes, `Write failed: ${err2.message}`);
+        try {
+          if (typeof entry.char.writeValue === "function") {
+            await entry.char.writeValue(txBytes.buffer);
+            appendLog("TX", targetUuid, txBytes, `${label} (fallback ArrayBuffer)`);
+          } else {
+            throw err2;
+          }
+        } catch (err3) {
+          appendLog("ERR", targetUuid, txBytes, `Write failed: ${err3?.message || err3}`);
+        }
       }
     }
   }).catch((queueErr) => {
-    appendLog("ERR", null, null, `BLE TX Queue Error: ${queueErr.message}`);
+    appendLog("ERR", null, null, `BLE TX Queue Error: ${queueErr?.message || queueErr}`);
   }));
 }
 
@@ -5842,9 +6028,20 @@ function computeBestPairs(poolCells) {
     }
   }
 
+  const unpairedCell = valid.find((c) => !usedNames.has(c.cellKey || c.cellName)) || null;
+  let spareBestPair = null;
+  if (unpairedCell) {
+    const match = pairs.find((p) => p.cellA === unpairedCell || p.cellB === unpairedCell);
+    if (match) {
+      spareBestPair = { ...match, isSpareMatch: true, spareCellName: unpairedCell.cellName };
+    }
+  }
+
   return {
-    topPairs: pairs.slice(0, 6),
-    disjointPairs
+    topPairs: pairs,
+    disjointPairs,
+    unpairedCell,
+    spareBestPair
   };
 }
 
@@ -5911,7 +6108,7 @@ function updateDynoControlButtons() {
     btnRun.disabled = !isConnected || active || selectedCount === 0;
     if (dynoState.confirmArmedUntil > Date.now() && !active) {
       const remSec = Math.max(1, Math.ceil((dynoState.confirmArmedUntil - Date.now()) / 1000));
-      btnRun.textContent = `⚡ Confirm Start (${remSec}s)`;
+      btnRun.textContent = `⏳ Starting in ${remSec}s… (Click to Cancel)`;
       btnRun.classList.add("confirm-armed");
     } else {
       btnRun.textContent = "▶ Run Dyno Test";
@@ -6316,12 +6513,25 @@ function buildDynoLeaderboardReportData(filterKeyOverride = null) {
     cell.deltaLeaderMv = idx === 0 ? 0 : Math.round((cell.score - leaderScore) * 1000);
   });
 
-  const { topPairs, disjointPairs } = computeBestPairs(poolCells);
-  let displayPairs = [];
-  if (poolCells.length >= 3) {
-    displayPairs = disjointPairs.concat(topPairs.filter((p) => !disjointPairs.includes(p))).slice(0, 4);
-  } else if (poolCells.length === 2) {
-    displayPairs = topPairs.slice(0, 1);
+  const { topPairs, disjointPairs, unpairedCell, spareBestPair } = computeBestPairs(poolCells);
+  const displayPairs = disjointPairs.slice();
+  if (spareBestPair) displayPairs.push(spareBestPair);
+
+  disjointPairs.forEach((pair, idx) => {
+    const pairNum = idx + 1;
+    pair.cellA.assignedPairRank = pairNum;
+    pair.cellA.assignedPartnerName = pair.cellB.cellName;
+    pair.cellA.assignedPairLabel = `Pair #${pairNum} (w/ ${pair.cellB.cellName})`;
+    pair.cellB.assignedPairRank = pairNum;
+    pair.cellB.assignedPartnerName = pair.cellA.cellName;
+    pair.cellB.assignedPairLabel = `Pair #${pairNum} (w/ ${pair.cellA.cellName})`;
+  });
+
+  if (unpairedCell && spareBestPair) {
+    const partner = spareBestPair.cellA === unpairedCell ? spareBestPair.cellB : spareBestPair.cellA;
+    unpairedCell.assignedPairRank = null;
+    unpairedCell.assignedPartnerName = partner.cellName;
+    unpairedCell.assignedPairLabel = `Spare (best w/ ${partner.cellName})`;
   }
 
   return {
@@ -6331,8 +6541,23 @@ function buildDynoLeaderboardReportData(filterKeyOverride = null) {
     poolCells,
     topPairs,
     disjointPairs,
+    unpairedCell,
+    spareBestPair,
     displayPairs
   };
+}
+
+function getDynoPairBadgeTitle(pair, idx, totalCells) {
+  if (pair && pair.isSpareMatch) {
+    return `⚡ Spare Cell Match (${pair.spareCellName})`;
+  }
+  if (totalCells >= 3) {
+    if (idx === 0) return "🥇 Best Race Pair";
+    if (idx === 1) return "🥈 2nd Race Pair";
+    if (idx === 2) return "🥉 3rd Race Pair";
+    return `🏁 Race Pair #${idx + 1}`;
+  }
+  return "🤝 Tested Pair";
 }
 
 function renderDynoRankingAndPairs() {
@@ -6368,7 +6593,7 @@ function renderDynoRankingAndPairs() {
   if (recPanel) {
     if (report.displayPairs.length > 0) {
       recPanel.innerHTML = report.displayPairs.map((pair, idx) => {
-        const badgeTitle = report.poolCells.length >= 3 ? (idx === 0 ? "🥇 Best Race Pair" : idx === 1 ? "🥈 2nd Pair" : `Option #${idx + 1}`) : "🤝 Tested Pair";
+        const badgeTitle = getDynoPairBadgeTitle(pair, idx, report.poolCells.length);
         return `<div class="dyno-pair-rec-card ${idx === 0 ? "rank-1" : ""}">
           <div class="dyno-pair-rec-head">
             <span>${badgeTitle}: ${escapeHtmlStr(pair.cellA.cellName)} + ${escapeHtmlStr(pair.cellB.cellName)}</span>
@@ -6904,7 +7129,9 @@ function buildDynoLeaderboardCsvString(reportData) {
     "V10_V",
     "Vend_V",
     "IR_mOhm",
-    "Tested_ISO"
+    "Tested_ISO",
+    "Assigned_Pair",
+    "Partner_Cell"
   ].join(","));
 
   reportData.poolCells.forEach((c) => {
@@ -6926,11 +7153,12 @@ function buildDynoLeaderboardCsvString(reportData) {
       c.v10 != null ? c.v10.toFixed(3) : "",
       c.vEnd != null ? c.vEnd.toFixed(3) : "",
       c.irMohm > 0 ? c.irMohm : "",
-      csvCell(c.createdAt || "")
+      csvCell(c.createdAt || ""),
+      csvCell(c.assignedPairLabel || ""),
+      csvCell(c.assignedPartnerName || "")
     ].join(","));
   });
 
-  const disjointSet = new Set(reportData.disjointPairs || []);
   rows.push("");
   rows.push([
     "Pair_Rank",
@@ -6946,7 +7174,7 @@ function buildDynoLeaderboardCsvString(reportData) {
   ].join(","));
 
   (reportData.displayPairs || []).forEach((pair, idx) => {
-    const pairType = disjointSet.has(pair) ? "Disjoint Race Pair" : "Top Alternative Pair";
+    const pairType = pair.isSpareMatch ? "Spare Cell Best Match" : "Disjoint Race Pair";
     rows.push([
       idx + 1,
       csvCell(pairType),
@@ -6980,14 +7208,11 @@ function buildDynoLeaderboardHtmlString(reportData) {
     ? `V0-Normalized (${DYNO_NORM_REF_V.toFixed(3)}V Ref)`
     : "Raw Loaded Voltage";
   const poolLabel = reportData.activeCombo.label;
-  const disjointSet = new Set(reportData.disjointPairs || []);
 
   const pairCardsHtml = (reportData.displayPairs && reportData.displayPairs.length > 0)
     ? reportData.displayPairs.map((pair, idx) => {
-        const badgeTitle = reportData.poolCells.length >= 3
-          ? (idx === 0 ? "🥇 Best Race Pair" : idx === 1 ? "🥈 2nd Pair" : `Option #${idx + 1}`)
-          : "🤝 Tested Pair";
-        const pairType = disjointSet.has(pair) ? "Disjoint Race Pair" : "Top Alternative Pair";
+        const badgeTitle = getDynoPairBadgeTitle(pair, idx, reportData.poolCells.length);
+        const pairType = pair.isSpareMatch ? "Spare Cell Best Match" : "Disjoint Race Pair";
         return `<div class="pair-card ${idx === 0 ? "rank-1" : ""}">
           <div class="pair-head">
             <span class="pair-title">${badgeTitle}: <strong>${escapeHtmlStr(pair.cellA.cellName)} + ${escapeHtmlStr(pair.cellB.cellName)}</strong></span>
@@ -7011,11 +7236,12 @@ function buildDynoLeaderboardHtmlString(reportData) {
       : (c.score != null ? `${c.score.toFixed(4)} V` : "—");
     const rawDisplay = c.rawScore != null ? `${c.rawScore.toFixed(4)} V` : "—";
     const testedText = c.createdAt ? new Date(c.createdAt).toLocaleString() : "—";
-    const searchKey = escapeHtmlStr(`${c.cellName} ${c.presetLabel}`.toLowerCase());
+    const searchKey = escapeHtmlStr(`${c.cellName} ${c.presetLabel} ${c.assignedPairLabel || ""}`.toLowerCase());
     return `<tr data-cell-search="${searchKey}">
       <td class="mono">#${c.rank}</td>
       <td><strong>${escapeHtmlStr(c.cellName)}</strong></td>
       <td>${escapeHtmlStr(c.presetLabel)}</td>
+      <td><span class="badge">${escapeHtmlStr(c.assignedPairLabel || "—")}</span></td>
       <td class="mono accent">${scoreDisplay}</td>
       <td class="mono">${rawDisplay}</td>
       <td class="mono">${c.v0 != null ? `${c.v0.toFixed(3)} V` : "—"}</td>
@@ -7176,6 +7402,7 @@ function buildDynoLeaderboardHtmlString(reportData) {
               <th>#</th>
               <th>Cell</th>
               <th>Motor Preset</th>
+              <th>Matched Pair</th>
               <th>Norm Score (1.42V)</th>
               <th>Raw Score</th>
               <th>V0 (Rest)</th>
@@ -7303,17 +7530,19 @@ function initBatteryDyno() {
   document.getElementById("btnDynoSelectPair2")?.addEventListener("click", () => setDynoSelectedSlots([false, false, true, true]));
   document.getElementById("btnDynoSelectAll")?.addEventListener("click", () => setDynoSelectedSlots([true, true, true, true]));
 
-  // Two-tap Run Test confirmation (3.0s window)
+  // 3.0s Auto-Start Countdown (click again during countdown to cancel)
   document.getElementById("btnDynoRun")?.addEventListener("click", () => {
     const now = Date.now();
     if (dynoState.confirmArmedUntil > now) {
-      startDynoTest();
+      clearDynoConfirmArm();
+      showToast("Dyno start countdown cancelled", "info");
     } else {
       dynoState.confirmArmedUntil = now + 3000;
       if (dynoState.confirmTimer) clearInterval(dynoState.confirmTimer);
       dynoState.confirmTimer = setInterval(() => {
         if (Date.now() >= dynoState.confirmArmedUntil) {
           clearDynoConfirmArm();
+          startDynoTest();
         } else {
           updateDynoControlButtons();
         }
@@ -7685,3 +7914,9 @@ window.buildDynoLeaderboardCsvString = buildDynoLeaderboardCsvString;
 window.buildDynoLeaderboardHtmlString = buildDynoLeaderboardHtmlString;
 window.exportDynoLeaderboardCsv = exportDynoLeaderboardCsv;
 window.exportDynoLeaderboardHtml = exportDynoLeaderboardHtml;
+window.normalizeBleUuid = normalizeBleUuid;
+window.buildOptionalServices = buildOptionalServices;
+window.toUint8Array = toUint8Array;
+window.requestBleDeviceWithFallbacks = requestBleDeviceWithFallbacks;
+window.connectBle = connectBle;
+window.enumerateGatt = enumerateGatt;

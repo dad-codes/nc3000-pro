@@ -334,6 +334,133 @@ def test_telemetry_and_hw_settings():
         # Clean state
         page.evaluate("() => { window.switchWorkingMode('RACE_READY', false); window.keeperState.active = false; window.keeperState.pairs[0].active = false; }")
 
+        print("\n--- TEST 7: Bluefy iOS BLE UUID Normalization & Progressive Fallback ---")
+        bluefy_res = page.evaluate("""async () => {
+            const optionalServices = window.buildOptionalServices();
+            const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+            const allValidStrings = Array.isArray(optionalServices)
+                && optionalServices.length > 0
+                && optionalServices.every((u) => typeof u === 'string' && uuidRegex.test(u));
+
+            const normCheck = {
+                fromNum: window.normalizeBleUuid(0xffe0),
+                fromAlias: window.normalizeBleUuid('generic_access'),
+                fromShortHex: window.normalizeBleUuid('FFE1')
+            };
+
+            const requestCalls = [];
+            const writes = [];
+            const mockChar = {
+                uuid: 'FFE1',
+                properties: {},
+                startNotifications: async () => {},
+                addEventListener: () => {},
+                writeValue: async (buf) => { writes.push(Array.from(new Uint8Array(buf.buffer || buf))); }
+            };
+            const mockService = {
+                uuid: 'FFE0',
+                isPrimary: true,
+                getCharacteristics: async () => [],
+                getCharacteristic: async (u) => {
+                    if (u === '0000ffe1-0000-1000-8000-00805f9b34fb') return mockChar;
+                    throw new Error('Characteristic not found');
+                }
+            };
+            const mockServer = {
+                connected: true,
+                getPrimaryServices: async () => {
+                    throw new Error('Request payload could not be parsed');
+                },
+                getPrimaryService: async (u) => {
+                    if (u === '0000ffe0-0000-1000-8000-00805f9b34fb') return mockService;
+                    throw new Error('Service not found');
+                },
+                disconnect: () => { mockServer.connected = false; }
+            };
+            const mockDevice = {
+                name: 'NC3000 Pro Mock',
+                id: 'ios-bluefy-mock-1',
+                gatt: {
+                    connected: false,
+                    connect: async () => { mockDevice.gatt.connected = true; return mockServer; },
+                    disconnect: () => { mockDevice.gatt.connected = false; mockServer.connected = false; }
+                },
+                addEventListener: () => {}
+            };
+
+            const origBluetoothDescriptor = Object.getOwnPropertyDescriptor(navigator, 'bluetooth');
+            Object.defineProperty(navigator, 'bluetooth', {
+                configurable: true,
+                value: {
+                    requestDevice: async (opts) => {
+                        requestCalls.push(opts);
+                        if (requestCalls.length === 1) {
+                            throw new Error('Request payload could not be parsed');
+                        }
+                        return mockDevice;
+                    }
+                }
+            });
+
+            await window.connectBle();
+            const statusAfterConnect = document.getElementById('keeperStatusText').textContent;
+            const bleConnectedClass = document.body.classList.contains('ble-connected');
+            const infoName = document.getElementById('infoName').textContent;
+            const txSelected = document.getElementById('txCharSelect').value;
+
+            // Verify user cancellation stops immediately without retrying fallbacks
+            let cancelCallCount = 0;
+            Object.defineProperty(navigator, 'bluetooth', {
+                configurable: true,
+                value: {
+                    requestDevice: async () => {
+                        cancelCallCount++;
+                        const e = new Error('User cancelled the requestDevice() chooser.');
+                        e.name = 'NotFoundError';
+                        throw e;
+                    }
+                }
+            });
+            await window.connectBle();
+
+            if (origBluetoothDescriptor) {
+                Object.defineProperty(navigator, 'bluetooth', origBluetoothDescriptor);
+            }
+
+            return {
+                allValidStrings,
+                optionalCount: optionalServices.length,
+                hasNoAliases: !optionalServices.includes('generic_access') && !optionalServices.includes('battery_service'),
+                hasSkyrcUuid: optionalServices.includes('0000ffe0-0000-1000-8000-00805f9b34fb'),
+                normCheck,
+                requestCallsCount: requestCalls.length,
+                secondCallOptions: requestCalls[1],
+                statusAfterConnect,
+                bleConnectedClass,
+                infoName,
+                txSelected,
+                cancelCallCount
+            };
+        }""")
+        print("Bluefy iOS BLE fallback test result:", bluefy_res)
+        assert bluefy_res["allValidStrings"] is True, "buildOptionalServices() must return only 36-char lowercase UUID strings"
+        assert bluefy_res["hasNoAliases"] is True, "buildOptionalServices() must not contain raw GATT alias strings"
+        assert bluefy_res["hasSkyrcUuid"] is True, "buildOptionalServices() must include canonical 0xFFE0 UUID"
+        assert bluefy_res["normCheck"]["fromNum"] == "0000ffe0-0000-1000-8000-00805f9b34fb"
+        assert bluefy_res["normCheck"]["fromAlias"] == "00001800-0000-1000-8000-00805f9b34fb"
+        assert bluefy_res["normCheck"]["fromShortHex"] == "0000ffe1-0000-1000-8000-00805f9b34fb"
+        assert bluefy_res["requestCallsCount"] == 2, f"Expected fallback to 2nd requestDevice attempt, got {bluefy_res['requestCallsCount']}"
+        assert bluefy_res["secondCallOptions"] == {
+            "acceptAllDevices": True,
+            "optionalServices": ["0000ffe0-0000-1000-8000-00805f9b34fb"]
+        }
+        assert "Connected" in bluefy_res["statusAfterConnect"], f"Expected Connected status, got {bluefy_res['statusAfterConnect']}"
+        assert bluefy_res["bleConnectedClass"] is True, "document.body must have ble-connected class"
+        assert bluefy_res["infoName"] == "NC3000 Pro Mock", f"Expected infoName NC3000 Pro Mock, got {bluefy_res['infoName']}"
+        assert bluefy_res["txSelected"] == "0000ffe1-0000-1000-8000-00805f9b34fb", f"Expected normalized 0xFFE1 TX, got {bluefy_res['txSelected']}"
+        assert bluefy_res["cancelCallCount"] == 1, "User cancellation (NotFoundError) must not trigger retry fallbacks"
+        print("[PASS] Bluefy iOS BLE UUID normalization & progressive fallback verified")
+
         print("\n--- ALL TELEMETRY & HARDWARE SYSTEM SETTINGS TESTS PASSED! ---")
         browser.close()
 

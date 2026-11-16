@@ -83,6 +83,36 @@ def test_battery_dyno():
         assert frame_bytes[43] == cs, "Checksum mismatch on 0x94 frame"
         print("[PASS] 0x94 frame disables firmware Linear Current Reduce (outStopCurrentMa == 2500)")
 
+        print("\n--- TEST 3B: 3-Second Auto-Start Countdown & Click-to-Cancel ---")
+        page.evaluate("""() => {
+            document.body.classList.add('ble-connected');
+            window.renderDynoAll();
+        }""")
+        assert page.text_content("#btnDynoRun").strip() == "▶ Run Dyno Test"
+        page.click("#btnDynoRun")
+        armed_text = page.text_content("#btnDynoRun")
+        assert "Starting in " in armed_text and "Click to Cancel" in armed_text, f"Unexpected armed label: {armed_text}"
+        # Second click cancels the countdown
+        page.click("#btnDynoRun")
+        assert page.text_content("#btnDynoRun").strip() == "▶ Run Dyno Test"
+        assert page.evaluate("window.dynoState.confirmArmedUntil === 0")
+        assert "cancelled" in page.text_content("#toastContainer").lower()
+
+        # First click followed by natural countdown expiry calls startDynoTest()
+        page.evaluate("() => { document.getElementById('toastContainer').innerHTML = ''; }")
+        page.click("#btnDynoRun")
+        page.evaluate("() => { window.dynoState.confirmArmedUntil = Date.now() + 200; }")
+        time.sleep(0.55)
+        assert page.evaluate("window.dynoState.confirmArmedUntil === 0")
+        assert "connect to your skyrc nc3000 pro" in page.text_content("#toastContainer").lower(), (
+            "Countdown expiry should automatically invoke startDynoTest()"
+        )
+        page.evaluate("""() => {
+            document.body.classList.remove('ble-connected');
+            window.renderDynoAll();
+        }""")
+        print("[PASS] #btnDynoRun 3s auto-start countdown and click-to-cancel verified")
+
         print("\n--- TEST 4: Simulated 4-Slot Dyno Run, State Isolation, Interpolation & Metrics ---")
         # Initialize clean storage and prepare an active 4-slot 45s @ 2500 mA Dyno run
         page.evaluate("""() => {
@@ -296,6 +326,8 @@ def test_battery_dyno():
                 hasCsvBtn: !!document.getElementById('btnDynoExportLeaderboardCsv'),
                 hasHtmlBtn: !!document.getElementById('btnDynoExportLeaderboardHtml'),
                 cellNames: report.poolCells.map((c) => c.cellName),
+                assignedCount: report.poolCells.filter((c) => !!c.assignedPairLabel).length,
+                pairCount: report.displayPairs.length,
                 bestPair: report.displayPairs[0] ? `${report.displayPairs[0].cellA.cellName} + ${report.displayPairs[0].cellB.cellName}` : '',
                 csv,
                 html
@@ -303,15 +335,82 @@ def test_battery_dyno():
         }""")
         assert export_check["hasCsvBtn"] and export_check["hasHtmlBtn"], "Leaderboard export buttons must exist"
         assert set(export_check["cellNames"]) == {"NC-A1", "NC-A2", "NC-B1", "NC-B2"}
+        assert export_check["pairCount"] == 2 and export_check["assignedCount"] == 4
         assert export_check["bestPair"] == "NC-A1 + NC-A2", f"Expected NC-A1 + NC-A2, got {export_check['bestPair']}"
         assert "Rank,Cell_Name,Motor_Preset" in export_check["csv"]
+        assert "Assigned_Pair,Partner_Cell" in export_check["csv"]
         assert "Pair_Rank,Pair_Type,Cell_A,Cell_B" in export_check["csv"]
         assert "NC-A1" in export_check["csv"] and "NC-A2" in export_check["csv"]
         assert "Best Race Pair" in export_check["html"]
+        assert "Matched Pair" in export_check["html"]
         assert "NC-A1 + NC-A2" in export_check["html"]
         for cname in ("NC-A1", "NC-A2", "NC-B1", "NC-B2"):
             assert cname in export_check["html"], f"Missing {cname} in exported HTML report"
-        print("[PASS] Pair Recommender, partitioning & Leaderboard/Pair CSV+HTML exports verified")
+
+        # Verify all cells are paired when pool size > 8 (both even 10 cells -> 5 pairs, and odd 11 cells -> 5 pairs + 1 spare match)
+        all_pair_check = page.evaluate("""() => {
+            const base = window.loadDynoSavedRuns();
+            const makeSlot = (idx, name, score, vend, ir) => ({
+                slotIdx: idx,
+                cellName: name,
+                v0: 1.420,
+                metrics: { score, normScore: score, rawScore: score, avgDropMv: Math.round((1.42 - score) * 1000), sustainedPct: 90, vEnd: vend, irMohm: ir, punchDrop: 0.05, lateSag: 0.02 }
+            });
+            const extraRun10 = {
+                id: 'dyno_pool_10',
+                createdAt: new Date('2026-11-15T07:00:00Z').toISOString(),
+                presetId: 'hyper-dash-3',
+                presetLabel: 'Hyper-Dash 3',
+                ratedMaxMa: 3000,
+                targetCurrentMa: 2300,
+                dur: 45,
+                note: '',
+                slots: Array.from({ length: 10 }, (_, k) => makeSlot(k % 4, `C${String(k + 1).padStart(2, '0')}`, +(1.340 - k * 0.005).toFixed(4), +(1.300 - k * 0.005).toFixed(4), 14 + k))
+            };
+            window.saveDynoRuns([...base, extraRun10]);
+            window.dynoState.rankingFilterKey = '45_2300';
+            window.renderDynoAll();
+            const r10 = window.buildDynoLeaderboardReportData('45_2300');
+            const csv10 = window.buildDynoLeaderboardCsvString(r10);
+            const html10 = window.buildDynoLeaderboardHtmlString(r10);
+            const uiCards10 = document.querySelectorAll('#dynoPairRecommenderPanel .dyno-pair-rec-card').length;
+
+            // Add an 11th cell to test odd-pool spare cell pairing
+            const extraRun11 = {
+                id: 'dyno_pool_11',
+                createdAt: new Date('2026-11-15T07:05:00Z').toISOString(),
+                presetId: 'hyper-dash-3',
+                presetLabel: 'Hyper-Dash 3',
+                ratedMaxMa: 3000,
+                targetCurrentMa: 2300,
+                dur: 45,
+                note: '',
+                slots: [makeSlot(0, 'C11', 1.2800, 1.2400, 26)]
+            };
+            window.saveDynoRuns([...base, extraRun10, extraRun11]);
+            window.renderDynoAll();
+            const r11 = window.buildDynoLeaderboardReportData('45_2300');
+            const csv11 = window.buildDynoLeaderboardCsvString(r11);
+            const html11 = window.buildDynoLeaderboardHtmlString(r11);
+            const uiCards11 = document.querySelectorAll('#dynoPairRecommenderPanel .dyno-pair-rec-card').length;
+
+            return { r10, csv10, html10, uiCards10, r11, csv11, html11, uiCards11 };
+        }""")
+        assert len(all_pair_check["r10"]["poolCells"]) == 10
+        assert len(all_pair_check["r10"]["disjointPairs"]) == 5
+        assert len(all_pair_check["r10"]["displayPairs"]) == 5
+        assert all_pair_check["uiCards10"] == 5, f"Expected 5 UI pair cards for 10 cells, got {all_pair_check['uiCards10']}"
+        assert "Race Pair #5" in all_pair_check["html10"]
+        assert "C09" in all_pair_check["csv10"] and "C10" in all_pair_check["csv10"]
+
+        assert len(all_pair_check["r11"]["poolCells"]) == 11
+        assert len(all_pair_check["r11"]["disjointPairs"]) == 5
+        assert len(all_pair_check["r11"]["displayPairs"]) == 6
+        assert all_pair_check["uiCards11"] == 6, f"Expected 6 UI cards (5 disjoint + 1 spare) for 11 cells, got {all_pair_check['uiCards11']}"
+        assert "Spare Cell Best Match" in all_pair_check["csv11"]
+        assert "Spare Cell Match (C11)" in all_pair_check["html11"]
+        assert all(c.get("assignedPairLabel") for c in all_pair_check["r11"]["poolCells"]), "Every cell including odd 11th cell must have an assignedPairLabel"
+        print("[PASS] Pair Recommender (all cells + odd spare match) & Leaderboard/Pair CSV+HTML exports verified")
 
         # Cleanup localStorage so subsequent suites start clean
         page.evaluate("() => localStorage.removeItem('nc3000_battery_tests_v1')")
