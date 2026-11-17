@@ -18,7 +18,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="styles.css?v=1.2.26" />
+  <link rel="stylesheet" href="styles.css?v=1.2.28" />
 </head>
 <body>
   <header class="topbar">
@@ -93,6 +93,24 @@
         <span>Battery Test (Motor Dyno)</span>
         <span class="tab-pulse-dot hidden" id="dynoPulseDot" title="Motor Dyno test running"></span>
       </button>
+      <div class="companion-tabs-group" id="companionTabsGroup" aria-label="Mini4WDTournament.com Companion Apps">
+        <a href="https://mini4wdtournament.com/" target="_blank" rel="noopener noreferrer" class="companion-suite-badge" id="navPromoMini4wd" data-promo-placement="tab-nav" data-promo-feature="suite_home" title="Visit Mini4WDTournament.com Suite">🏎️ MINI4WD SUITE</a>
+        <a href="https://mini4wdtournament.com/tournament-manager/" target="_blank" rel="noopener noreferrer" class="tab-nav-ext-link" id="navTabTournament" data-promo-placement="tab-nav-tournament" data-promo-feature="tournament_management" title="Open Tournament Manager on Mini4WDTournament.com">
+          <span>🏆</span>
+          <span>Tournaments</span>
+          <span class="ext-arrow" aria-hidden="true">↗</span>
+        </a>
+        <a href="https://mini4wdtournament.com/motor-timer/" target="_blank" rel="noopener noreferrer" class="tab-nav-ext-link" id="navTabMotorBreakIn" data-promo-placement="tab-nav-breakin" data-promo-feature="motor_break_in" title="Open Motor Break-In &amp; RPM Checker on Mini4WDTournament.com">
+          <span>⚙️</span>
+          <span>Motor Break-In</span>
+          <span class="ext-arrow" aria-hidden="true">↗</span>
+        </a>
+        <a href="https://mini4wdtournament.com/track-editor/" target="_blank" rel="noopener noreferrer" class="tab-nav-ext-link" id="navTabTrackEditor" data-promo-placement="tab-nav-track" data-promo-feature="track_editor" title="Open 3D Track Editor on Mini4WDTournament.com">
+          <span>🛣️</span>
+          <span>Track Editor</span>
+          <span class="ext-arrow" aria-hidden="true">↗</span>
+        </a>
+      </div>
     </nav>
 
     <div class="keeper-body" id="keeperBody">
@@ -607,6 +625,12 @@
           </div>
         </div>
 
+        <div class="dyno-mini4wd-callout" id="dynoMini4wdCallout">
+          <span class="callout-badge">COMPANION TOOL</span>
+          <span class="callout-text">Conditioning a new Tamiya motor or prepping for race day? Open <a href="https://mini4wdtournament.com/motor-timer/" target="_blank" rel="noopener noreferrer" class="callout-inline-link" data-promo-placement="dyno-callout-breakin" data-promo-feature="motor_break_in"><strong>Motor Break-In</strong></a>, <a href="https://mini4wdtournament.com/track-editor/" target="_blank" rel="noopener noreferrer" class="callout-inline-link" data-promo-placement="dyno-callout-track" data-promo-feature="track_editor"><strong>Track Editor</strong></a> &amp; <a href="https://mini4wdtournament.com/tournament-manager/" target="_blank" rel="noopener noreferrer" class="callout-inline-link" data-promo-placement="dyno-callout-tournament" data-promo-feature="tournament_management"><strong>Tournament Manager</strong></a></span>
+          <a href="https://mini4wdtournament.com/motor-timer/" target="_blank" rel="noopener noreferrer" class="callout-link" data-promo-placement="dyno-callout" data-promo-feature="motor_break_in">Open Motor Break-In ↗</a>
+        </div>
+
         <!-- Configuration Grid -->
         <div class="dyno-config-grid">
           <label class="dyno-field dyno-field-wide">
@@ -891,6 +915,59 @@
         </div>
       </div>
     </section>
+
+    <!-- Companion App Spotlight Banner: Mini4WDTournament.com -->
+    <aside class="mini4wd-promo-banner" id="mini4wdPromoBanner" aria-label="Mini4WDTournament.com Companion App">
+      <div class="promo-banner-top">
+        <div class="promo-brand-group">
+          <span class="promo-eyebrow">🏁 MINI 4WD RACE DAY ECOSYSTEM</span>
+          <h4 class="promo-heading">
+            Take Your Cars from the Pit Table to the Podium with
+            <a href="https://mini4wdtournament.com/" target="_blank" rel="noopener noreferrer" class="promo-heading-link" data-promo-placement="banner-heading">Mini4WDTournament.com</a>
+          </h4>
+          <span class="promo-compact-inline-pills">
+            <a href="https://mini4wdtournament.com/tournament-manager/" target="_blank" rel="noopener noreferrer" class="promo-compact-pill-link" data-promo-placement="compact-tournament" data-promo-feature="tournament_management">🏆 Tournaments ↗</a>
+            <span aria-hidden="true">•</span>
+            <a href="https://mini4wdtournament.com/motor-timer/" target="_blank" rel="noopener noreferrer" class="promo-compact-pill-link" data-promo-placement="compact-breakin" data-promo-feature="motor_break_in">⚙️ Motor Break-In ↗</a>
+            <span aria-hidden="true">•</span>
+            <a href="https://mini4wdtournament.com/track-editor/" target="_blank" rel="noopener noreferrer" class="promo-compact-pill-link" data-promo-placement="compact-track" data-promo-feature="track_editor">🛣️ Track Editor ↗</a>
+          </span>
+        </div>
+        <div class="promo-header-actions">
+          <a href="https://mini4wdtournament.com/" target="_blank" rel="noopener noreferrer" class="btn primary small promo-cta-btn" id="btnPromoLaunchMain" data-promo-placement="banner-cta">Launch Mini4WDTournament.com ↗</a>
+          <button type="button" id="btnTogglePromoBanner" class="btn small promo-toggle-btn" title="Minimize or expand companion app showcase" aria-expanded="true">Minimize ▲</button>
+        </div>
+      </div>
+
+      <div class="promo-features-grid">
+        <a href="https://mini4wdtournament.com/tournament-manager/" target="_blank" rel="noopener noreferrer" class="promo-feature-card" id="promoCardTournament" data-promo-placement="card-tournament" data-promo-feature="tournament_management">
+          <div class="promo-feature-head">
+            <span class="promo-feature-icon" aria-hidden="true">🏆</span>
+            <strong class="promo-feature-title">Tournament Management</strong>
+            <span class="promo-feature-arrow">↗</span>
+          </div>
+          <p class="promo-feature-desc">Organize Mini 4WD race meets with live brackets, heat scheduling, lap timing &amp; instant leaderboard standings.</p>
+        </a>
+
+        <a href="https://mini4wdtournament.com/motor-timer/" target="_blank" rel="noopener noreferrer" class="promo-feature-card" id="promoCardMotorBreakIn" data-promo-placement="card-breakin" data-promo-feature="motor_break_in">
+          <div class="promo-feature-head">
+            <span class="promo-feature-icon" aria-hidden="true">⚙️</span>
+            <strong class="promo-feature-title">Motor Break-In</strong>
+            <span class="promo-feature-arrow">↗</span>
+          </div>
+          <p class="promo-feature-desc">Run guided motor break-in cycles, track conditioning timers &amp; dial in peak RPM for Dash and Tuned motors.</p>
+        </a>
+
+        <a href="https://mini4wdtournament.com/track-editor/" target="_blank" rel="noopener noreferrer" class="promo-feature-card" id="promoCardTrackEditor" data-promo-placement="card-track" data-promo-feature="track_editor">
+          <div class="promo-feature-head">
+            <span class="promo-feature-icon" aria-hidden="true">🛣️</span>
+            <strong class="promo-feature-title">Track Editor</strong>
+            <span class="promo-feature-arrow">↗</span>
+          </div>
+          <p class="promo-feature-desc">Design custom Tamiya Mini 4WD circuits, plan lane changers &amp; calculate total track section lengths.</p>
+        </a>
+      </div>
+    </aside>
   </section>
 
   <main class="workspace-grid localhost-only" style="display: none;" aria-hidden="true">
@@ -1049,9 +1126,11 @@
         <span class="footer-sep">•</span>
         <span class="footer-sub">Mini 4WD Battery Prep and Voltage Controller</span>
         <span class="footer-sep">•</span>
-        <span class="footer-version mono" id="siteFooterVersion">v1.2.26</span>
+        <span class="footer-version mono" id="siteFooterVersion">v1.2.28</span>
       </div>
       <div class="footer-credit">
+        <a href="https://mini4wdtournament.com/" target="_blank" rel="noopener noreferrer" class="footer-promo-link" data-promo-placement="footer" title="Mini 4WD Tournament Management, Motor Break-In &amp; Track Editor">🏎️ mini4wdtournament.com</a>
+        <span class="footer-sep">•</span>
         <span>Built by <a href="https://dad-codes.com" target="_blank" rel="noopener noreferrer" class="dad-codes-link" title="Visit dad-codes.com">dad-codes.com</a></span>
       </div>
     </div>
@@ -1065,7 +1144,7 @@
         <div class="drawer-header-title">
           <span class="badge keeper-badge">SETUP</span>
           <h3 id="configDrawerTitle">Target Voltage &amp; Presets</h3>
-          <span class="badge version-badge mono" id="drawerVersionHeader" title="Application version">v1.2.26</span>
+          <span class="badge version-badge mono" id="drawerVersionHeader" title="Application version">v1.2.28</span>
         </div>
         <button type="button" id="btnCloseConfig" class="btn small close-drawer-btn" title="Close configuration">&times; Done</button>
       </div>
@@ -1645,8 +1724,8 @@
             <div class="version-card-main">
               <span class="version-card-title">DEPLOYED VERSION</span>
               <div class="version-number-row">
-                <span class="version-pill mono" id="appVersionBadge">v1.2.26</span>
-                <span class="version-meta mono" id="appBuildMeta">Build 50 (2026.11.17)</span>
+                <span class="version-pill mono" id="appVersionBadge">v1.2.28</span>
+                <span class="version-meta mono" id="appBuildMeta">Build 52 (2026.11.17)</span>
               </div>
             </div>
             <div class="version-card-status" title="Target: Firebase Hosting (nc3000pro-ui)">
@@ -1659,7 +1738,7 @@
       <div class="drawer-footer">
         <button type="button" id="btnApplyConfig" class="btn primary full-width">Save &amp; Close Settings</button>
         <div class="drawer-version-footer mono">
-          <span>SkyRC NC3000 Pro WebUI <strong id="drawerVersionFooter">v1.2.26</strong></span>
+          <span>SkyRC NC3000 Pro WebUI <strong id="drawerVersionFooter">v1.2.28</strong></span>
         </div>
       </div>
     </aside>
@@ -1696,6 +1775,6 @@
     window.logAnalyticsEvent = window.logAnalyticsEvent || function() {};
   </script>
   <script src="firebase-config.js" async></script>
-  <script src="app.js?v=1.2.26"></script>
+  <script src="app.js?v=1.2.28"></script>
 </body>
 </html>

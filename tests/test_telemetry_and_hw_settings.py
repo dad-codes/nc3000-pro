@@ -461,6 +461,147 @@ def test_telemetry_and_hw_settings():
         assert bluefy_res["cancelCallCount"] == 1, "User cancellation (NotFoundError) must not trigger retry fallbacks"
         print("[PASS] Bluefy iOS BLE UUID normalization & progressive fallback verified")
 
+        print("\n--- TEST 7: Mini4WDTournament.com Direct App Tabs & Always-Visible Promotion ---")
+        page.click("#tabBtnDashboard")
+        time.sleep(0.2)
+        promo_dom = page.evaluate("""() => {
+            const tabsGroup = document.getElementById('companionTabsGroup');
+            const navSuite = document.getElementById('navPromoMini4wd');
+            const navTournament = document.getElementById('navTabTournament');
+            const navBreakIn = document.getElementById('navTabMotorBreakIn');
+            const navTrack = document.getElementById('navTabTrackEditor');
+            const cardTournament = document.getElementById('promoCardTournament');
+            const cardBreakIn = document.getElementById('promoCardMotorBreakIn');
+            const cardTrack = document.getElementById('promoCardTrackEditor');
+            const banner = document.getElementById('mini4wdPromoBanner');
+            const dynoCallout = document.getElementById('dynoMini4wdCallout');
+            const dynoLink = dynoCallout?.querySelector('a.callout-link');
+            const footerLink = document.querySelector('#siteFooter a.footer-promo-link');
+            const bannerText = banner ? banner.innerText : '';
+            const allExtTargetsValid = [
+                navSuite, navTournament, navBreakIn, navTrack,
+                cardTournament, cardBreakIn, cardTrack,
+                dynoLink, footerLink, document.getElementById('btnPromoLaunchMain')
+            ].every(el =>
+                el &&
+                el.getAttribute('target') === '_blank' &&
+                (el.getAttribute('rel') || '').includes('noopener')
+            );
+            return {
+                hasTabsGroup: !!tabsGroup,
+                hasBanner: !!banner,
+                hasDynoCallout: !!dynoCallout,
+                hasFooterLink: !!footerLink,
+                allExtTargetsValid,
+                navTournamentHref: navTournament?.getAttribute('href'),
+                navBreakInHref: navBreakIn?.getAttribute('href'),
+                navTrackHref: navTrack?.getAttribute('href'),
+                cardTournamentHref: cardTournament?.getAttribute('href'),
+                cardBreakInHref: cardBreakIn?.getAttribute('href'),
+                cardTrackHref: cardTrack?.getAttribute('href'),
+                dynoLinkHref: dynoLink?.getAttribute('href'),
+                footerHref: footerLink?.getAttribute('href'),
+                hasTournamentFeature: bannerText.includes('Tournament Management'),
+                hasBreakInFeature: bannerText.includes('Motor Break-In'),
+                hasTrackEditorFeature: bannerText.includes('Track Editor'),
+                tabsVisibleNormal: tabsGroup ? getComputedStyle(tabsGroup).display !== 'none' : false,
+                bannerVisibleNormal: banner ? getComputedStyle(banner).display !== 'none' : false,
+                gridVisibleBefore: banner ? getComputedStyle(banner.querySelector('.promo-features-grid')).display !== 'none' : false
+            };
+        }""")
+        print("Promo DOM check:", promo_dom)
+        assert promo_dom["hasTabsGroup"] and promo_dom["hasBanner"] and promo_dom["hasDynoCallout"] and promo_dom["hasFooterLink"]
+        assert promo_dom["allExtTargetsValid"], "All promo links must open in a new tab with rel=noopener"
+        assert promo_dom["navTournamentHref"] == "https://mini4wdtournament.com/tournament-manager/"
+        assert promo_dom["navBreakInHref"] == "https://mini4wdtournament.com/motor-timer/"
+        assert promo_dom["navTrackHref"] == "https://mini4wdtournament.com/track-editor/"
+        assert promo_dom["cardTournamentHref"] == "https://mini4wdtournament.com/tournament-manager/"
+        assert promo_dom["cardBreakInHref"] == "https://mini4wdtournament.com/motor-timer/"
+        assert promo_dom["cardTrackHref"] == "https://mini4wdtournament.com/track-editor/"
+        assert promo_dom["dynoLinkHref"] == "https://mini4wdtournament.com/motor-timer/"
+        assert promo_dom["footerHref"] == "https://mini4wdtournament.com/"
+        assert promo_dom["hasTournamentFeature"] and promo_dom["hasBreakInFeature"] and promo_dom["hasTrackEditorFeature"]
+        assert promo_dom["tabsVisibleNormal"] and promo_dom["bannerVisibleNormal"] and promo_dom["gridVisibleBefore"]
+
+        # Test Minimize/Expand toggle and localStorage persistence across reload
+        page.click("#btnTogglePromoBanner")
+        time.sleep(0.15)
+        compact_state = page.evaluate("""() => {
+            const banner = document.getElementById('mini4wdPromoBanner');
+            const grid = banner.querySelector('.promo-features-grid');
+            const btn = document.getElementById('btnTogglePromoBanner');
+            return {
+                hasCompactClass: banner.classList.contains('is-compact'),
+                gridDisplay: getComputedStyle(grid).display,
+                btnText: btn.textContent.trim(),
+                ariaExpanded: btn.getAttribute('aria-expanded'),
+                stored: localStorage.getItem('skyrc_nc3000_promo_compact')
+            };
+        }""")
+        assert compact_state["hasCompactClass"] is True
+        assert compact_state["gridDisplay"] == "none"
+        assert compact_state["ariaExpanded"] == "false"
+        assert compact_state["stored"] == "1"
+
+        page.reload()
+        page.wait_for_load_state("networkidle")
+        time.sleep(0.3)
+        persisted_compact = page.evaluate("""() => {
+            const banner = document.getElementById('mini4wdPromoBanner');
+            return banner.classList.contains('is-compact') && getComputedStyle(banner.querySelector('.promo-features-grid')).display === 'none';
+        }""")
+        assert persisted_compact is True, "Compact promo banner state must persist across reload"
+
+        # Restore expanded state
+        page.click("#btnTogglePromoBanner")
+        time.sleep(0.15)
+        assert page.evaluate("!document.getElementById('mini4wdPromoBanner').classList.contains('is-compact')")
+
+        # Verify companion tabs and banner remain visible in BOTH Pit Display Mode AND Production (non-localhost) Mode
+        page.click("#btnTogglePitMode")
+        time.sleep(0.15)
+        pit_visible = page.evaluate("""() => {
+            const tabsGroup = document.getElementById('companionTabsGroup');
+            const banner = document.getElementById('mini4wdPromoBanner');
+            return document.body.classList.contains('pit-mode') &&
+                getComputedStyle(tabsGroup).display !== 'none' &&
+                getComputedStyle(banner).display !== 'none';
+        }""")
+        assert pit_visible is True, "Companion tabs and promo banner must stay visible in Pit Display Mode"
+        page.click("#btnTogglePitMode")
+        time.sleep(0.15)
+
+        prod_visible = page.evaluate("""() => {
+            document.body.classList.remove('is-localhost');
+            const tabsGroup = document.getElementById('companionTabsGroup');
+            const banner = document.getElementById('mini4wdPromoBanner');
+            const navTournament = document.getElementById('navTabTournament');
+            const navBreakIn = document.getElementById('navTabMotorBreakIn');
+            const navTrack = document.getElementById('navTabTrackEditor');
+            const res = {
+                tabsVisible: getComputedStyle(tabsGroup).display !== 'none',
+                bannerVisible: getComputedStyle(banner).display !== 'none',
+                tournamentVisible: getComputedStyle(navTournament).display !== 'none',
+                breakInVisible: getComputedStyle(navBreakIn).display !== 'none',
+                trackVisible: getComputedStyle(navTrack).display !== 'none'
+            };
+            document.body.classList.add('is-localhost');
+            return res;
+        }""")
+        assert all(prod_visible.values()), f"Companion tabs and banner must be visible in production (non-localhost) normal mode: {prod_visible}"
+
+        # Verify no horizontal overflow and visible tabs on mobile viewport (390x844)
+        page.set_viewport_size({"width": 390, "height": 844})
+        time.sleep(0.2)
+        mobile_check = page.evaluate("""() => ({
+            overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+            tabsVisible: getComputedStyle(document.getElementById('companionTabsGroup')).display !== 'none',
+            tournamentVisible: getComputedStyle(document.getElementById('navTabTournament')).display !== 'none'
+        })""")
+        assert mobile_check["overflow"] is False, "Mobile viewport must not horizontally overflow with promo UI"
+        assert mobile_check["tabsVisible"] and mobile_check["tournamentVisible"], "Companion app tabs must stay visible on mobile"
+        print("[PASS] Mini4WDTournament.com direct app tabs, always-visible normal/pit/prod modes, persistence, and mobile responsiveness verified")
+
         print("\n--- ALL TELEMETRY & HARDWARE SYSTEM SETTINGS TESTS PASSED! ---")
         browser.close()
 

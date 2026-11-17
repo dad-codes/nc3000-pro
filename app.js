@@ -1,6 +1,6 @@
 // SkyRC NC3000 Pro — BLE Reverse Engineering & Firmware Workbench
-const APP_VERSION = "v1.2.26";
-const APP_BUILD_DATE = "Build 50 (2026.11.17)";
+const APP_VERSION = "v1.2.28";
+const APP_BUILD_DATE = "Build 52 (2026.11.17)";
 window.APP_VERSION = APP_VERSION;
 window.APP_BUILD_DATE = APP_BUILD_DATE;
 
@@ -7422,6 +7422,12 @@ function buildDynoLeaderboardHtmlString(reportData) {
         </table>
       </div>
     </div>
+    <p style="margin-top: 18px; font-size: 12px; color: var(--muted); text-align: center;">
+      Race Day Companion: <a href="https://mini4wdtournament.com/" target="_blank" rel="noopener noreferrer" style="color: var(--blue); font-weight: 600; text-decoration: none;">Mini4WDTournament.com</a> —
+      <a href="https://mini4wdtournament.com/tournament-manager/" target="_blank" rel="noopener noreferrer" style="color: var(--blue); text-decoration: none;">Tournament Management</a> •
+      <a href="https://mini4wdtournament.com/motor-timer/" target="_blank" rel="noopener noreferrer" style="color: var(--blue); text-decoration: none;">Motor Break-In</a> •
+      <a href="https://mini4wdtournament.com/track-editor/" target="_blank" rel="noopener noreferrer" style="color: var(--blue); text-decoration: none;">Track Editor</a>
+    </p>
   </div>
   <script>
     (function () {
@@ -7631,6 +7637,51 @@ function initBatteryDyno() {
   renderDynoAll();
 }
 
+const PROMO_COMPACT_STORAGE_KEY = "skyrc_nc3000_promo_compact";
+
+/**
+ * Initializes Mini4WDTournament.com promo banner toggle state persistence
+ * and outbound promo click analytics.
+ */
+function initMini4wdPromoUI() {
+  const banner = document.getElementById("mini4wdPromoBanner");
+  const toggleBtn = document.getElementById("btnTogglePromoBanner");
+
+  const applyCompactState = (isCompact) => {
+    if (!banner || !toggleBtn) return;
+    banner.classList.toggle("is-compact", isCompact);
+    toggleBtn.textContent = isCompact ? "Expand ▼" : "Minimize ▲";
+    toggleBtn.setAttribute("aria-expanded", isCompact ? "false" : "true");
+  };
+
+  if (banner && toggleBtn) {
+    let savedCompact = false;
+    try {
+      savedCompact = localStorage.getItem(PROMO_COMPACT_STORAGE_KEY) === "1";
+    } catch (_) {}
+    applyCompactState(savedCompact);
+
+    toggleBtn.addEventListener("click", () => {
+      const nextCompact = !banner.classList.contains("is-compact");
+      applyCompactState(nextCompact);
+      try {
+        localStorage.setItem(PROMO_COMPACT_STORAGE_KEY, nextCompact ? "1" : "0");
+      } catch (_) {}
+    });
+  }
+
+  document.querySelectorAll("a[data-promo-placement]").forEach((link) => {
+    link.addEventListener("click", () => {
+      if (typeof window.logAnalyticsEvent === "function") {
+        window.logAnalyticsEvent("mini4wd_promo_click", {
+          placement: link.getAttribute("data-promo-placement") || "unknown",
+          feature: link.getAttribute("data-promo-feature") || "overview"
+        });
+      }
+    });
+  });
+}
+
 // Startup Environment Check
 window.addEventListener("DOMContentLoaded", () => {
   if (IS_LOCALHOST) {
@@ -7720,6 +7771,7 @@ window.addEventListener("DOMContentLoaded", () => {
   loadHwSettingsPrefs();
   initTelemetryChart();
   initBatteryDyno();
+  initMini4wdPromoUI();
 
   // App Tab Navigation
   document.querySelectorAll(".tab-nav-btn").forEach((btn) => {
@@ -7920,3 +7972,4 @@ window.toUint8Array = toUint8Array;
 window.requestBleDeviceWithFallbacks = requestBleDeviceWithFallbacks;
 window.connectBle = connectBle;
 window.enumerateGatt = enumerateGatt;
+window.initMini4wdPromoUI = initMini4wdPromoUI;

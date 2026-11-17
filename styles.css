@@ -2929,8 +2929,9 @@ body.pit-mode #btnTogglePitMode {
 
 /* Site Footer & dad-codes.com Attribution */
 .site-footer {
-  margin-top: 40px;
-  padding: 20px 24px;
+  margin-top: 0;
+  padding: 10px 20px;
+  flex-shrink: 0;
   background: var(--bg-1);
   border-top: 1px solid var(--border);
   color: var(--text-2);
@@ -2983,8 +2984,24 @@ body.pit-mode #btnTogglePitMode {
   font-size: 11.5px;
   display: flex;
   align-items: center;
-  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
   color: var(--text-1);
+}
+
+.site-footer .footer-promo-link {
+  color: #fbbf24;
+  font-weight: 700;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(251, 191, 36, 0.45);
+  padding-bottom: 1px;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.site-footer .footer-promo-link:hover {
+  color: #fde68a;
+  border-bottom-color: #fbbf24;
 }
 
 .site-footer .dad-codes-link {
@@ -3325,6 +3342,7 @@ body.pit-mode #btnTogglePitMode {
 .app-tab-nav {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   border-bottom: 1px solid var(--border);
   padding-bottom: 8px;
@@ -4418,6 +4436,331 @@ body.pit-mode #btnTogglePitMode {
   .dyno-config-grid,
   .dyno-slots-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+/* ============================================================================
+   Mini4WDTournament.com Companion App Promotion UI (Non-Intrusive)
+   ============================================================================ */
+
+/* Top Nav Companion App Tabs Group */
+.companion-tabs-group {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.companion-suite-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.16);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  padding: 4px 8px;
+  border-radius: 999px;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.companion-suite-badge:hover {
+  background: rgba(245, 158, 11, 0.28);
+  border-color: #fbbf24;
+}
+
+.tab-nav-ext-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  text-decoration: none;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.14) 0%, rgba(56, 189, 248, 0.1) 100%);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  color: var(--text-0);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.tab-nav-ext-link .ext-arrow {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: #38bdf8;
+}
+
+.tab-nav-ext-link:hover {
+  transform: translateY(-1px);
+  border-color: #fbbf24;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.24) 0%, rgba(56, 189, 248, 0.18) 100%);
+  box-shadow: 0 2px 10px rgba(245, 158, 11, 0.22);
+  color: #fff;
+}
+
+/* Motor Dyno Contextual Callout */
+.dyno-mini4wd-callout {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 7px 11px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, rgba(245, 158, 11, 0.09) 0%, rgba(56, 189, 248, 0.08) 100%);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-1);
+}
+
+.callout-badge {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  padding: 1px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.callout-text strong {
+  color: var(--text-0);
+}
+
+.callout-inline-link {
+  color: #bae6fd;
+  text-decoration: none;
+  border-bottom: 1px dotted rgba(56, 189, 248, 0.45);
+}
+
+.callout-inline-link:hover {
+  color: #fff;
+  border-bottom-color: #38bdf8;
+}
+
+.callout-link {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: #fbbf24;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(251, 191, 36, 0.45);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.callout-link:hover {
+  color: #fde68a;
+  border-bottom-color: #fbbf24;
+}
+
+/* Dedicated Ecosystem Spotlight Banner */
+.mini4wd-promo-banner {
+  background: linear-gradient(135deg, rgba(18, 23, 33, 0.96) 0%, rgba(25, 32, 46, 0.96) 60%, rgba(15, 28, 46, 0.96) 100%);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex-shrink: 0;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+.mini4wd-promo-banner.is-compact {
+  padding: 8px 12px;
+  gap: 0;
+}
+
+.promo-banner-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.promo-brand-group {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  min-width: 0;
+}
+
+.promo-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #fde68a;
+  background: rgba(245, 158, 11, 0.16);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  padding: 2px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.promo-heading {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-0);
+  margin: 0;
+}
+
+.promo-heading-link {
+  color: #38bdf8;
+  font-weight: 700;
+  text-decoration: none;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.4);
+}
+
+.promo-heading-link:hover {
+  color: #7dd3fc;
+  border-bottom-color: #38bdf8;
+}
+
+.promo-compact-inline-pills {
+  display: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #bae6fd;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.promo-compact-pill-link {
+  color: #bae6fd;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.promo-compact-pill-link:hover {
+  color: #fde68a;
+  text-decoration: underline;
+}
+
+.mini4wd-promo-banner.is-compact .promo-compact-inline-pills {
+  display: inline-flex;
+}
+
+.mini4wd-promo-banner.is-compact .promo-features-grid {
+  display: none;
+}
+
+.promo-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.promo-cta-btn {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  font-weight: 700;
+}
+
+.promo-toggle-btn {
+  color: var(--text-1);
+}
+
+.promo-features-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.promo-feature-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  text-decoration: none;
+  background: var(--bg-0);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+  min-width: 0;
+}
+
+.promo-feature-card:hover {
+  border-color: #38bdf8;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(56, 189, 248, 0.14);
+}
+
+.promo-feature-card[data-promo-feature="motor_break_in"]:hover {
+  border-color: #fbbf24;
+  box-shadow: 0 4px 14px rgba(245, 158, 11, 0.16);
+}
+
+.promo-feature-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.promo-feature-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.promo-feature-title {
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--text-0);
+}
+
+.promo-feature-arrow {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: #38bdf8;
+}
+
+.promo-feature-desc {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-1);
+  margin: 0;
+}
+
+@media (max-width: 960px) {
+  .companion-tabs-group {
+    margin-left: 0;
+    width: 100%;
+  }
+  .promo-features-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .tab-nav-ext-link {
+    padding: 5px 8px;
+    font-size: 11px;
+  }
+  .callout-link {
+    margin-left: 0;
+  }
+  .promo-header-actions {
+    width: 100%;
+  }
+  .promo-cta-btn {
+    flex: 1;
+    justify-content: center;
   }
 }
 
